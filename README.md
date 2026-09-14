@@ -282,3 +282,24 @@ docker run --rm -v ${PWD}:/src -w /src mcr.microsoft.com/dotnet/sdk:10.0 \
 
 Змінилися ОС, RID і шляхи, але архітектура залишилась `Arm64`, бо контейнер
 використовує процесор хоста. Вихідний код не змінювався жодного рядка.
+
+## Коротко: мінімум команд
+
+Усе з кореня `CrossApp`. Чотирьох команд достатньо, щоб зібрати, запустити,
+опублікувати і запустити з публікації:
+
+```bash
+dotnet build
+dotnet run --project src/Cli
+dotnet publish src/Cli -c Release -r osx-arm64 --self-contained true
+./src/Cli/bin/Release/net10.0/osx-arm64/publish/Cli
+```
+
+Замініть `osx-arm64` на свою RID (`win-x64`, `linux-x64`) — див. `dotnet --info`.
+
+Ще дві, якщо потрібно показати структуру рішення і результат multi-targeting:
+
+```bash
+dotnet sln list                 # два проєкти: Cli і Core
+ls src/Core/bin/Debug           # два підкаталоги: net8.0 і net10.0
+```
