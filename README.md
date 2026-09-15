@@ -47,11 +47,15 @@ CrossApp/
 ## Збірка і запуск
 
 ```bash
-dotnet build                            # усе рішення
-dotnet build src/Core/Core.csproj       # лише бібліотека (обидва TFM)
-dotnet run --project src/Cli            # запуск застосунку
-dotnet run --project src/Cli -- --json  # ті самі дані одним рядком JSON
+dotnet build                                   # усе рішення, обидва TFM
+dotnet build src/Core/Core.csproj              # лише бібліотека
+dotnet run --project src/Cli -f net10.0        # запуск застосунку
+dotnet run --project src/Cli -f net10.0 -- --json   # ті самі дані одним рядком JSON
 ```
+
+Обидва проєкти багатоцільові, тому `-f` обовʼязковий: без нього `dotnet run`
+відповідає «Your project targets multiple frameworks», а `dotnet publish` —
+помилкою `NETSDK1129`.
 
 `dotnet run --project src/Core` не працює і не має працювати: classlib не має
 точки входу `Main`, її результат — `Core.dll` для інших проєктів.
@@ -85,46 +89,59 @@ Cli залишається на `net10.0`, тому при збірці solution
 
 ### Різниця у виводі між двома TFM
 
-Щоб побачити другу гілку `#if`, потрібен застосунок, зібраний під `net8.0`. Оскільки
-runtime .NET 8 у системі не встановлено, використано self-contained публікацію —
-вона підтягує потрібний runtime pack з NuGet. `Cli` для цього тимчасово переведено
-на `<TargetFrameworks>net8.0;net10.0</TargetFrameworks>`:
+`Cli` теж багатоцільовий (`net8.0;net10.0`), тому застосунок збирається й
+запускається під обидва фреймворки. У системі встановлено лише runtime .NET 10,
+тож для net8.0 є два робочі шляхи.
+
+**1. Запустити net8.0-збірку на наявному runtime .NET 10** (roll-forward):
 
 ```bash
-dotnet publish src/Cli -c Release -f net8.0 -r osx-arm64 --self-contained true -o /tmp/net8run
-/tmp/net8run/Cli
+DOTNET_ROLL_FORWARD=Major dotnet run --project src/Cli -f net8.0
 ```
 
-Порівняння тих самих рядків виводу:
+Без змінної команда завершиться повідомленням «You must install or update .NET»,
+бо збірка просить саме `Microsoft.NETCore.App 8.0.0`.
 
-| Рядок | Збірка під net8.0 | Збірка під net10.0 |
-|---|---|---|
-| `Runtime` | `.NET 8.0.30` | `.NET 10.0.11` |
-| `Версія CLR` | `8.0.30` | `10.0.11` |
-| `TFM бібліотеки Core` | `збірка під net8.0` | `збірка під net10.0` |
-| `ОС` | `Darwin 25.4.0 Darwin Kernel Version 25.4.0: ... RELEASE_ARM64_T6020` | `macOS 26.4.1` |
+**2. Self-contained публікація зі справжнім runtime .NET 8** (runtime pack
+завантажується з NuGet):
 
-Останній рядок — несподіваний побічний результат. Значення `TargetFrameworkNote`
-відрізняється очікувано, бо його обрав препроцесор. Але й
-`RuntimeInformation.OSDescription` повернув **різні рядки для того самого коду на
-тій самій машині**: .NET 8 віддає сирий рядок з `uname`, а .NET 10 — оброблений
-маркетинговий рядок `macOS 26.4.1`. Тобто змінилася не наша логіка, а реалізація
-API всередині runtime.
+```bash
+dotnet publish src/Cli -c Release -f net8.0  -r osx-arm64 --self-contained true -o /tmp/sc8
+dotnet publish src/Cli -c Release -f net10.0 -r osx-arm64 --self-contained true -o /tmp/sc10
+/tmp/sc8/Cli
+/tmp/sc10/Cli
+```
 
-Це практичний аргумент на користь того, навіщо бібліотеці multi-targeting узагалі
-потрібен: код компілюється під обидва TFM без жодної помилки, але **поводиться
-по-різному**, і виявити це можна лише реальним запуском під кожен цільовий
-фреймворк, а не самою лише успішною збіркою.
+Порівняння трьох запусків:
 
-Після експерименту `Cli` повернуто до `<TargetFramework>net10.0</TargetFramework>`,
-щоб команди публікації в цьому README працювали без обов'язкового ключа `-f`.
+| Рядок | net8.0 на runtime 10 | net8.0 self-contained | net10.0 |
+|---|---|---|---|
+| `TFM бібліотеки Core` | `збірка під net8.0` | `збірка під net8.0` | `збірка під net10.0` |
+| `Runtime` | `.NET 10.0.11` | `.NET 8.0.30` | `.NET 10.0.11` |
+| `ОС` | `macOS 26.4.1` | `Darwin 25.4.0 ... RELEASE_ARM64_T6020` | `macOS 26.4.1` |
+
+Перший стовпець показує, що `TargetFrameworkNote` обирає **компілятор**, а не
+runtime: значення `збірка під net8.0` зберігається навіть тоді, коли код виконує
+.NET 10. Директива `#if` спрацювала один раз під час збірки.
+
+Третій рядок — несподіваний побічний результат. `RuntimeInformation.OSDescription`
+повернув **різні рядки для того самого коду на тій самій машині**: .NET 8 віддає
+сирий рядок з `uname`, .NET 10 — оброблений `macOS 26.4.1`. Причому різниця
+зʼявляється лише в self-contained варіанті, тобто залежить саме від версії
+runtime, а не від TFM збірки. Змінилася не наша логіка, а реалізація API
+всередині .NET.
+
+Це найкращий практичний аргумент на користь multi-targeting: код компілюється під
+обидва TFM без жодної помилки, але **поводиться по-різному**, і виявити це можна
+лише реальним запуском під кожен цільовий фреймворк, а не самою лише успішною
+збіркою.
 
 ## Публікація
 
 ```bash
-dotnet publish src/Cli -c Release -r osx-arm64  --self-contained true
-dotnet publish src/Cli -c Release -r osx-arm64  --self-contained false
-dotnet publish src/Cli -c Release -r linux-x64  --self-contained true
+dotnet publish src/Cli -c Release -f net10.0 -r osx-arm64  --self-contained true
+dotnet publish src/Cli -c Release -f net10.0 -r osx-arm64  --self-contained false
+dotnet publish src/Cli -c Release -f net10.0 -r linux-x64  --self-contained true
 ```
 
 Розмір каталогу:
@@ -290,8 +307,8 @@ docker run --rm -v ${PWD}:/src -w /src mcr.microsoft.com/dotnet/sdk:10.0 \
 
 ```bash
 dotnet build
-dotnet run --project src/Cli
-dotnet publish src/Cli -c Release -r osx-arm64 --self-contained true
+dotnet run --project src/Cli -f net10.0
+dotnet publish src/Cli -c Release -f net10.0 -r osx-arm64 --self-contained true
 ./src/Cli/bin/Release/net10.0/osx-arm64/publish/Cli
 ```
 
