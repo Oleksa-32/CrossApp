@@ -214,7 +214,7 @@ Self-contained бінарник із того самого коду запуск
 ### 1. `PublishSingleFile`
 
 ```bash
-dotnet publish src/Cli -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=true
+dotnet publish src/Cli -c Release -f net10.0 -r osx-arm64 --self-contained true -p:PublishSingleFile=true
 ```
 
 Замість 193 файлів у каталозі залишаються 3: виконуваний `Cli` і два файли
@@ -225,7 +225,7 @@ dotnet publish src/Cli -c Release -r osx-arm64 --self-contained true -p:PublishS
 ### 2. `PublishTrimmed`
 
 ```bash
-dotnet publish src/Cli -c Release -r osx-arm64 --self-contained true \
+dotnet publish src/Cli -c Release -f net10.0 -r osx-arm64 --self-contained true \
     -p:PublishSingleFile=true -p:PublishTrimmed=true
 ```
 
