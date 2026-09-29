@@ -1,0 +1,15 @@
+# Змішаний файл: P — товар, C — клієнт. Перша колонка — префікс типу.
+P;P-001;Ноутбук Lenovo IdeaPad 15;24999.00
+C;C-001;Іван Петренко;ivan.petrenko@example.com;+380671234567
+P;P-002;Миша бездротова Logitech M330;899.50
+C;C-002;Марія Коваль;maria.koval@example.com
+P;P-003;Клавіатура механічна Keychron K2;4250.00
+C;C-003;Андрій Шевчук;andrii.shevchuk@example.com;+380509876543
+P;P-004;Монітор Dell P2422H 24";7890.90
+C;C-004;Олена Бондар;olena.bondar@example.com
+P;P-005;SSD Samsung 980 1TB;3199.99
+C;C-005;Петро Мельник;petro.melnyk@example.com;+380931112233
+P;P-006;Без ціни
+C;C-006;;no.name@example.com
+W;W-001;Склад №1;Львів
+P;P-007;Навушники Sony;задорого

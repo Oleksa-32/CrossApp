@@ -18,15 +18,22 @@ if (args.Contains("--env", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// Режим змішаного файлу: рядки різних типів розрізняються префіксом у першій колонці.
+bool mixed = args.Contains("--mixed", StringComparer.OrdinalIgnoreCase);
+
 // Шлях приходить аргументом; типове значення будується через Path.Combine,
 // щоб не зашивати роздільник каталогів конкретної ОС.
-string path = args.Length > 0 ? args[0] : Path.Combine("data", "sample.csv");
+string[] paths = args.Where(argument => !argument.StartsWith("--")).ToArray();
+string path = paths.Length > 0 ? paths[0] : Path.Combine("data", mixed ? "mixed.csv" : "sample.csv");
 
 if (!File.Exists(path))
 {
     Console.WriteLine($"Файл не знайдено: {Path.GetFullPath(path)}");
     return 1;
 }
+
+if (mixed)
+    return PrintMixed(MixedCsvImporter.Load(path), path);
 
 // Формат обирається за розширенням — знову switch expression з константними патернами.
 ImportResult<ProductDto> result = Path.GetExtension(path).ToLowerInvariant() switch
@@ -54,6 +61,30 @@ Console.WriteLine($"Підсумок: усього {result.TotalRows}, прий�
                   $"пропущено {result.Errors.Count} ({result.ErrorRate:F1} % помилок)");
 
 return 0;
+
+static int PrintMixed(MixedImportResult result, string path)
+{
+    Console.WriteLine($"Файл: {Path.GetFullPath(path)}");
+    Console.WriteLine($"Завантажено товарів: {result.Products.Count}, клієнтів: {result.Customers.Count}");
+
+    foreach (ProductDto product in result.Products.Take(PreviewRows))
+        Console.WriteLine($"  товар   {product.Id,-6} {product.Name,-32} {product.Price,10:F2} грн");
+
+    foreach (CustomerDto customer in result.Customers.Take(PreviewRows))
+        Console.WriteLine($"  клієнт  {customer.Id,-6} {customer.Name,-32} {customer.Email}");
+
+    if (result.Errors.Count > 0)
+    {
+        Console.WriteLine($"Пропущено рядків: {result.Errors.Count}");
+        foreach (string error in result.Errors)
+            Console.WriteLine($"  ! {error}");
+    }
+
+    Console.WriteLine($"Підсумок: усього {result.TotalRows}, прийнято {result.Accepted}, " +
+                      $"пропущено {result.Errors.Count} ({result.ErrorRate:F1} % помилок)");
+
+    return 0;
+}
 
 static void PrintEnvironment(string[] args)
 {

@@ -20,9 +20,11 @@ CrossApp/
         ProductDto.cs       рядок прайса: Id, Name, Price, Note?
         CustomerDto.cs      клієнт: Id, Name, Email, Phone?
         ImportResult.cs     ImportResult<T>(Items, Errors) + статистика
+        MixedImportResult.cs    два типи даних з одного файлу + помилки
       Import/               розбір вхідних файлів (тиждень 3)
         ProductCsvImporter.cs   Load(path) + ParseLine(line) через switch expression
         ProductJsonImporter.cs  той самий ImportResult на System.Text.Json
+        MixedCsvImporter.cs     різнорідні рядки за префіксом типу P / C
       Domain/               сутності з поведінкою та інваріантами (тиждень 4)
       Storage/              реалізації сховищ (тиждень 5)
     Cli/                    консольний застосунок (net10.0)
@@ -31,6 +33,7 @@ CrossApp/
   data/
     sample.csv              13 рядків даних, з них 3 навмисно пошкоджені
     sample.json             той самий домен у JSON (додаткове завдання)
+    mixed.csv               товари і клієнти в одному файлі (додаткове завдання)
 ```
 
 Напрямок залежності односторонній: **Cli → Core**. Core не знає про Cli, тому
@@ -45,6 +48,7 @@ CrossApp/
 ```bash
 dotnet run --project src/Cli -f net10.0                          # data/sample.csv за замовчуванням
 dotnet run --project src/Cli -f net10.0 -- data/sample.json      # той самий домен у JSON
+dotnet run --project src/Cli -f net10.0 -- --mixed                # товари і клієнти з одного файлу
 dotnet run --project src/Cli -f net10.0 -- data/nope.csv         # повідомлення + код виходу 1
 dotnet run --project src/Cli -f net10.0 -- --env                 # режим лабораторної 2
 ```
@@ -100,6 +104,53 @@ dotnet run --project src/Cli -f net10.0 -- --env                 # режим л
 Знак `?` стоїть лише в `Note` і `Phone` — полях, значення яких у файлі справді
 може не бути. Позначати nullable «про запас» шкідливо: кожне звернення до такого
 поля потребуватиме зайвої перевірки, і підказка перетвориться на шум.
+
+### Змішаний файл: два типи з одного проходу
+
+`data/mixed.csv` містить рядки різних типів, які розрізняються **префіксом у
+першій колонці**: `P` — товар, `C` — клієнт.
+
+```
+P;P-001;Ноутбук Lenovo IdeaPad 15;24999.00
+C;C-001;Іван Петренко;ivan.petrenko@example.com;+380671234567
+```
+
+`MixedCsvImporter` розбирає такий файл одним `switch expression`, у якому
+префікс — це **константний патерн на першій позиції патерна списку**:
+
+```csharp
+["P", var id, var name, var price] when decimal.TryParse(...) => new ParseProduct(...),
+["C", var id, var name, var email, var phone]                 => new ParseCustomer(...),
+["C", var id, var name, var email]                            => new ParseCustomer(...),
+["P", ..] => new ParseFailed($"товар: очікую 4 колонки ..."),
+[var tag, ..] => new ParseFailed($"невідомий префікс типу '{tag}'"),
+```
+
+Дві нові речі порівняно з основним завданням:
+
+- **зріз `..`** — «будь-яка кількість решти елементів»: `["P", ..]` читається як
+  «рядок починається з P, а що далі — неважливо». Це дає змогу відповісти
+  «префікс правильний, але форма рядка не та» замість загального «невідомий тип»;
+- **два різні типи результату з одного switch**: ієрархія `ParseOutcome`
+  має три різновиди — `ParseProduct`, `ParseCustomer` і `ParseFailed`, а метод
+  `Load` розводить їх по своїх списках патерном типу.
+
+Клієнт приймається і з телефоном, і без нього — саме тому для нього дві гілки
+різної довжини, а `Phone` у `CustomerDto` оголошено як `string?`.
+
+Результат повертає `MixedImportResult(Products, Customers, Errors)`:
+узагальнений `ImportResult<T>` тут не підходить, бо `T` мав би бути один, а
+рядки файлу описують два різні типи.
+
+```
+Завантажено товарів: 5, клієнтів: 5
+Пропущено рядків: 4
+  ! рядок 12: товар: очікую 4 колонки (P;id;назва;ціна), отримав 3
+  ! рядок 13: клієнт: ідентифікатор, ім'я або пошта порожні
+  ! рядок 14: невідомий префікс типу 'W': очікую P або C
+  ! рядок 15: товар: ціна 'задорого' не є невід'ємним числом
+Підсумок: усього 14, прийнято 10, пропущено 4 (28.6 % помилок)
+```
 
 ## Предметна область
 
@@ -411,3 +462,21 @@ dotnet publish src/Cli -c Release -f net10.0 -r osx-arm64 --self-contained true
 dotnet sln list                 # два проєкти: Cli і Core
 ls src/Core/bin/Debug           # два підкаталоги: net8.0 і net10.0
 ```
+
+
+cd /Users/admin/LNU/lab_KPP/CrossApp && git switch main && dotnet build -f net10.0
+
+dotnet run --project src/Cli -f net10.0
+
+dotnet run --project src/Cli -f net10.0 -- data/sample.csv
+
+неіснуючий
+dotnet run --project src/Cli -f net10.0 -- data/nope.csv; echo "код виходу: $?"
+
+додаткові
+dotnet run --project src/Cli -f net10.0 -- data/sample.json
+
+dotnet run --project src/Cli -f net10.0 -- README.md
+
+
+dotnet build -f net8.0
