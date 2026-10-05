@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Cli;
 using Core;
 using Core.Dto;
 using Core.Import;
@@ -21,16 +22,28 @@ if (args.Contains("--env", StringComparer.OrdinalIgnoreCase))
 // Режим змішаного файлу: рядки різних типів розрізняються префіксом у першій колонці.
 bool mixed = args.Contains("--mixed", StringComparer.OrdinalIgnoreCase);
 
+// Режим лабораторної 4: доменна модель, сценарії «успіх» і «порушення інваріантів».
+bool domain = args.Contains("--domain", StringComparer.OrdinalIgnoreCase);
+
 // Шлях приходить аргументом; типове значення будується через Path.Combine,
 // щоб не зашивати роздільник каталогів конкретної ОС.
 string[] paths = args.Where(argument => !argument.StartsWith("--")).ToArray();
-string path = paths.Length > 0 ? paths[0] : Path.Combine("data", mixed ? "mixed.csv" : "sample.csv");
+string defaultFile = (mixed, domain) switch
+{
+    (true, _) => "mixed.csv",
+    (_, true) => "catalog.csv",
+    _ => "sample.csv"
+};
+string path = paths.Length > 0 ? paths[0] : Path.Combine("data", defaultFile);
 
 if (!File.Exists(path))
 {
     Console.WriteLine($"Файл не знайдено: {Path.GetFullPath(path)}");
     return 1;
 }
+
+if (domain)
+    return DomainDemo.Run(path);
 
 if (mixed)
     return PrintMixed(MixedCsvImporter.Load(path), path);
