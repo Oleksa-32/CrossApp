@@ -2,8 +2,11 @@ using System.Text;
 using System.Text.Json;
 using Cli;
 using Core;
+using Core.Abstractions;
 using Core.Dto;
 using Core.Import;
+using Core.Services;
+using Core.Storage;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -28,6 +31,41 @@ bool domain = args.Contains("--domain", StringComparer.OrdinalIgnoreCase);
 // Шлях приходить аргументом; типове значення будується через Path.Combine,
 // щоб не зашивати роздільник каталогів конкретної ОС.
 string[] paths = args.Where(argument => !argument.StartsWith("--")).ToArray();
+
+// Імпорт лабораторної 3 — за прапорцем --import або коли передано шлях до файлу.
+bool import = args.Contains("--import", StringComparer.OrdinalIgnoreCase) || paths.Length > 0;
+
+// Типовий режим (лабораторна 5). Composition root: єдине місце, де названо
+// конкретні класи сховищ; далі сервіс і сценарій бачать лише IOrderStore.
+if (!mixed && !domain && !import)
+{
+    bool useFile = args.Contains("--file", StringComparer.OrdinalIgnoreCase);
+    string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "orders.json");
+
+    IOrderStore store = useFile
+        ? new FileOrderStore(dataPath)
+        : new InMemoryOrderStore(SampleData.Orders());
+    if (args.Contains("--cache", StringComparer.OrdinalIgnoreCase))
+        store = new CachingOrderStore(store);
+    var service = new OrderService(store, TimeProvider.System);
+
+    Console.WriteLine($"Сховище: {store}");
+    try
+    {
+        int exitCode = OrderScenario.Run(service, store, SampleData.Products());
+        if (store is CachingOrderStore caching)
+            Console.WriteLine($"Кеш: влучань {caching.Hits}, промахів {caching.Misses}");
+        return exitCode;
+    }
+    catch (InvalidDataException ex)
+    {
+        // Старий формат, обірваний JSON або запис, що порушує інваріанти.
+        Console.WriteLine(ex.Message);
+        Console.WriteLine($"Видаліть {dataPath} і запустіть знову.");
+        return 1;
+    }
+}
+
 string defaultFile = (mixed, domain) switch
 {
     (true, _) => "mixed.csv",

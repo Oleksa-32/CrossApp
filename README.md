@@ -32,11 +32,20 @@ CrossApp/
         OrderStatus.cs      Draft / Confirmed / Cancelled
         Product.cs          товар каталогу: Create, ChangePrice, ToDto/FromDto
         ProductCatalog.cs   ImportResult<ProductDto> → ImportResult<Product> (додаткові завдання)
+      Abstractions/         контракти (тиждень 5)
+        IOrderStore.cs      List / GetById / Add / Update / Remove
       Storage/              реалізації сховищ (тиждень 5)
-    Cli/                    консольний застосунок (net10.0)
+        InMemoryOrderStore.cs   словник у пам'яті, початкові дані через конструктор
+        FileOrderStore.cs       кеш + JSON-файл, запис після кожної зміни
+        CachingOrderStore.cs    декоратор над будь-яким IOrderStore (додаткове завдання)
+      Services/
+        OrderService.cs     CreateOrder / AddLine / Confirm / Cancel / Find / Search
+      SampleData.cs         10 товарів і 16 замовлень для демо і тижня 7
+    Cli/                    консольний застосунок (net8.0;net10.0)
       Cli.csproj            містить ProjectReference на Core
-      Program.cs            лише виклик Core і форматування виводу
+      Program.cs            composition root + вибір режиму
       DomainDemo.cs         сценарії «успіх» і «порушення інваріантів» (тиждень 4)
+      OrderScenario.cs      сценарій сервісу і сценарій відмови (тиждень 5)
   data/
     sample.csv              13 рядків даних, з них 3 навмисно пошкоджені
     sample.json             той самий домен у JSON (додаткове завдання)
@@ -48,13 +57,14 @@ CrossApp/
 його згодом можна буде підключити до проєктів `Api` (тиждень 10) і Blazor-клієнта
 (тиждень 12). Правило «жодної бізнес-логіки в Program.cs» діє з цієї лабораторної.
 
-Каталог `Storage/` поки порожній і тримається в репозиторії через файл-заглушку
-`.gitkeep` — git не зберігає порожніх каталогів.
+Файл сховища `data/orders.json` з'являється не в корені репозиторію, а поруч зі
+зібраним застосунком (`src/Cli/bin/Debug/net10.0/data/`), бо шлях будується від
+`AppContext.BaseDirectory`. У git він не потрапляє — `bin/` ігнорується.
 
 ## Імпорт даних (лабораторна 3)
 
 ```bash
-dotnet run --project src/Cli -f net10.0                          # data/sample.csv за замовчуванням
+dotnet run --project src/Cli -f net10.0 -- --import             # data/sample.csv за замовчуванням
 dotnet run --project src/Cli -f net10.0 -- data/sample.json      # той самий домен у JSON
 dotnet run --project src/Cli -f net10.0 -- --mixed                # товари і клієнти з одного файлу
 dotnet run --project src/Cli -f net10.0 -- data/nope.csv         # повідомлення + код виходу 1
@@ -291,6 +301,260 @@ error CS1061: 'IReadOnlyList<OrderLine>' does not contain a definition for 'Add'
 за кортежем `(Status, target)` у `Order.EnsureCanMoveTo` — усе, чого немає в
 таблиці, заборонено.
 
+## Сервісний шар (лабораторна 5)
+
+```bash
+dotnet run --project src/Cli -f net10.0                       # InMemoryOrderStore, після виходу дані зникають
+dotnet run --project src/Cli -f net10.0 -- --file             # FileOrderStore, data/orders.json, дані накопичуються
+dotnet run --project src/Cli -f net10.0 -- --file --cache     # те саме через декоратор CachingOrderStore
+```
+
+Доменна логіка не залежить від способу зберігання: сервіс працює з
+**інтерфейсом** сховища, а яку реалізацію підставити, вирішує лише точка входу.
+
+| Роль | Тип | Де |
+|---|---|---|
+| Контракт сховища | `IOrderStore` | `src/Core/Abstractions/IOrderStore.cs` |
+| Реалізація в пам'яті | `InMemoryOrderStore` | `src/Core/Storage/InMemoryOrderStore.cs` |
+| Файлова реалізація | `FileOrderStore` | `src/Core/Storage/FileOrderStore.cs` |
+| Декоратор (додатково) | `CachingOrderStore` | `src/Core/Storage/CachingOrderStore.cs` |
+| Сервіс | `OrderService` | `src/Core/Services/OrderService.cs` |
+| Composition root | top-level `Program.cs` | `src/Cli/Program.cs` |
+
+### Контракт `IOrderStore`
+
+```csharp
+public interface IOrderStore
+{
+    IReadOnlyList<Order> List();
+    Order? GetById(string id);
+    void Add(Order item);
+    void Update(Order item);
+    bool Remove(string id);
+}
+```
+
+П'ять методів — рівно те, що потрібно сервісу, і нічого «про запас»: кожен
+зайвий метод мусила б підтримувати кожна реалізація, включно з майбутньою БД.
+
+- `Order?` — запису з таким id може не бути, і це нормальний результат пошуку.
+- `IReadOnlyList<Order>` — зовнішній код не може змінити сховище в обхід `Add` / `Update` / `Remove`.
+- `Add` кидає `InvalidOperationException` на дубль id, `Update` — на невідомий id.
+  Однакова поведінка в обох реалізаціях — частина контракту, а не деталь реалізації.
+- Ні `Flush`, ні `SaveToFile` у контракті немає: це специфіка файлу.
+
+Агрегат зберігається як одне ціле: `GetById` повертає замовлення **разом із
+рядками**, а окремого сховища для `OrderLine` немає.
+
+### Дві реалізації
+
+| | `InMemoryOrderStore` | `FileOrderStore` |
+|---|---|---|
+| Де дані | `Dictionary<string, Order>` | кеш у пам'яті + файл JSON |
+| Скільки живуть | до виходу з програми | між запусками |
+| Початкові дані | `IEnumerable<Order>? seed` у конструкторі (`SampleData.Orders()`) | те, що є у файлі |
+| Читання | зі словника | файл читається один раз, при першому зверненні |
+| Запис | у словник | у кеш, потім `Flush()` — увесь файл після кожної зміни |
+| Шлях | — | `AppContext.BaseDirectory/data/orders.json` |
+| Формат | — | JSON-масив `OrderDto` з вкладеними `OrderLineDto`, `WriteIndented` |
+
+Обидва словники порівнюють ключі через `StringComparer.OrdinalIgnoreCase`:
+`Find("o-001")` і `Find("O-001")` знаходять те саме замовлення.
+
+На диск ідуть DTO, а не сутності: `Order` має приватний конструктор і властивості
+без `set`, серіалізувати його напряму незручно, а формат файлу не повинен
+диктувати форму домену. Мапінг — `order.ToDto()` / `Order.FromDto(dto)` з
+тижня 4. `FromDto` відтворює замовлення через `Create` → `AddLine` → `Confirm`,
+тому пошкоджений файл не обходить інваріантів.
+
+Фрагмент `data/orders.json` (кирилиця екранована як `Н…` — штатна поведінка
+`System.Text.Json`, налаштуємо на тижні 9):
+
+```json
+[
+  {
+    "Id": "O-6B33F382",
+    "CustomerId": "C-007",
+    "CreatedOn": "2026-10-13T00:02:58.342071",
+    "Status": "Confirmed",
+    "Lines": [
+      { "ProductId": "P-001", "ProductName": "Ноу...", "UnitPrice": 24999.00, "Quantity": 1 },
+      ...
+```
+
+Якщо файл має старий формат, обірваний JSON або запис, що порушує інваріанти,
+`FileOrderStore` загортає `JsonException` / `ArgumentException` /
+`InvalidOperationException` у єдиний `InvalidDataException`, а `Cli` друкує:
+
+```
+Файл .../data/orders.json не вдалося прочитати: Замовлення O-6B33F382 порожнє: підтвердити можна лише замовлення з рядками
+Видаліть .../data/orders.json і запустіть знову.
+```
+
+### Сервіс
+
+```csharp
+public sealed class OrderService(IOrderStore store, TimeProvider clock)
+```
+
+Обидва параметри первинного конструктора — абстракції: `IOrderStore` і
+`TimeProvider` (вбудований у .NET 8 абстрактний «годинник»). Сервіс не містить
+жодного `new …Store`, і слів «File» чи «Dictionary» в ньому немає.
+
+| Операція | Що робить |
+|---|---|
+| `CreateOrder(customerId)` | id `O-` + 8 символів `Guid`, дата з `clock`; `Order.Create` → `store.Add` |
+| `AddLine(orderId, product, qty)` | `Get` → `order.AddLine` → `store.Update` |
+| `Confirm(orderId)` / `Cancel(orderId)` | `Get` → метод сутності → `store.Update` |
+| `All()` / `Find(id)` | `store.List()` / `store.GetById(id)` |
+| `Search(Func<Order, bool>)` | довільна умова (додаткове завдання 2) |
+
+Розподіл перевірок без дублювання: інваріанти — у сутності (`Order.Create`,
+`AddLine`, `Confirm`); унікальність id — у сховищі (`Add`); «запис не знайдено» —
+у сервісі (`Get` через `?? throw`), бо для `Find` відсутність — нормальний `null`,
+а для операції зміни — відмова.
+
+### Схема залежностей
+
+```
+Cli (Program.cs) ──> OrderService ──> IOrderStore <── InMemoryOrderStore
+       │                                   ^ ^─────── FileOrderStore
+       │                                   └───────── CachingOrderStore ──> IOrderStore (будь-який)
+       └── new … лише тут (composition root)
+```
+
+`Cli → OrderService → IOrderStore → InMemoryOrderStore | FileOrderStore`.
+Стрілки від реалізацій ведуть **до** інтерфейсу: і сервіс, і сховища залежать від
+абстракції (Dependency Inversion), а об'єкт сховища передається сервісу ззовні
+через конструктор (Dependency Injection, вручну, без контейнера).
+
+### Composition root
+
+```csharp
+bool useFile = args.Contains("--file", StringComparer.OrdinalIgnoreCase);
+string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "orders.json");
+
+IOrderStore store = useFile
+    ? new FileOrderStore(dataPath)
+    : new InMemoryOrderStore(SampleData.Orders());
+if (args.Contains("--cache", StringComparer.OrdinalIgnoreCase))
+    store = new CachingOrderStore(store);
+var service = new OrderService(store, TimeProvider.System);
+```
+
+Це єдине місце з конкретними класами: пошук `new [A-Za-z]*OrderStore` по `src`
+знаходить лише ці рядки `Program.cs`. `Microsoft.Extensions.DependencyInjection`
+не підключено — контейнер з'явиться на тижні 10 разом з Api.
+
+### Вивід: пам'ять
+
+```
+Сховище: InMemoryOrderStore (у пам'яті)
+Замовлень на старті: 16
+
+=== Додати і змінити ===
+CreateOrder("C-007") → O-77B58E7C
+AddLine ×3, Confirm:
+  O-77B58E7C клієнт C-007 від 2026-10-13 — підтверджене, рядків 2, сума 27697.50 грн
+    P-001  Ноутбук Lenovo IdeaPad 15          1 ×  24999.00 =   24999.00 грн
+    P-002  Миша бездротова Logitech M330      3 ×    899.50 =    2698.50 грн
+
+=== Знайти за id ===
+Find("o-77b58e7c") → O-77B58E7C клієнт C-007 від 2026-10-13 — підтверджене, рядків 2, сума 27697.50 грн
+Find("O-404") → не знайдено (null — нормальний результат пошуку)
+
+=== Список ===
+  O-001 клієнт C-001 від 2026-09-01 — підтверджене, рядків 3, сума 27048.50 грн
+  ...
+  O-77B58E7C клієнт C-007 від 2026-10-13 — підтверджене, рядків 2, сума 27697.50 грн
+Усього: 17
+```
+
+Повторний запуск знову починає з 16 зразків: створене замовлення зникло разом із процесом.
+
+### Вивід: файл, два запуски поспіль
+
+```
+Сховище: FileOrderStore (.../src/Cli/bin/Debug/net10.0/data/orders.json)
+Замовлень на старті: 0
+...
+Усього: 1
+```
+
+```
+Сховище: FileOrderStore (.../src/Cli/bin/Debug/net10.0/data/orders.json)
+Замовлень на старті: 1
+...
+=== Список ===
+  O-6B33F382 клієнт C-007 від 2026-10-13 — підтверджене, рядків 2, сума 27697.50 грн
+  O-04BAD002 клієнт C-007 від 2026-10-13 — підтверджене, рядків 2, сума 27697.50 грн
+Усього: 2
+```
+
+Той самий сервіс, той самий сценарій — два різні режими роботи. Файл не
+обнуляється: кожен запуск дописує одне замовлення.
+
+### Сценарій відмови
+
+```
+=== Сценарій відмови ===
+  Confirm("O-404"): помилка — Немає замовлення з id=O-404.
+  AddLine("O-404", ...): помилка — Немає замовлення з id=O-404.
+  AddLine у підтверджене замовлення: помилка — Замовлення O-77B58E7C має стан «підтверджене»: додавати рядки можна лише в чернетці
+  AddLine з нульовою кількістю: помилка — Кількість товару P-002 у рядку має бути більшою за нуль (Parameter 'quantity') Actual value was 0.
+  CreateOrder без клієнта: помилка — Замовлення O-91519A26: ідентифікатор клієнта обов'язковий (Parameter 'customerId')
+  додати дубль id у сховище: помилка — Замовлення з id=O-77B58E7C уже існує.
+Після відмов: O-77B58E7C клієнт C-007 від 2026-10-13 — підтверджене, рядків 2, сума 27697.50 грн
+```
+
+Винятки перехоплює `try/catch` у `Cli` (`OrderScenario.TryDo`) і друкує
+повідомлення замість стека. Після всіх відмов замовлення не змінилося.
+
+### Самоперевірка
+
+| Перевірка | Результат |
+|---|---|
+| `grep -rn FileOrderStore src/Core` | лише `Storage/FileOrderStore.cs` |
+| `grep -rn "Console\." src/Core` | порожньо |
+| Два запуски з `--file` | 1, потім 2 замовлення — накопичення |
+| Core без `FileOrderStore.cs` | `dotnet build src/Core/Core.csproj` — 0 помилок, `OrderService` не залежить від файлу |
+| Тип параметра конструктора сервісу | `IOrderStore` — інтерфейс |
+| `dotnet build` (net8.0 і net10.0) | 0 Warning(s), 0 Error(s) |
+
+### Що зміниться на тижні 11 (БД)
+
+З'явиться третя реалізація, наприклад `EfOrderStore(AppDbContext db) : IOrderStore`,
+у якій `Add` / `Update` / `Remove` стануть операціями `DbSet<Order>` і
+`SaveChanges()`, а `GetById` — запитом з `Include(o => o.Lines)`, бо агрегат має
+завантажуватися з рядками. Знадобиться налаштування мапінгу (сутність з
+приватними сетерами і полем `_lines`, або окремі entity-класи) і рядок
+підключення. У composition root зміниться один вираз вибору реалізації.
+`IOrderStore`, `OrderService`, `Order` і `OrderScenario` не змінюються.
+
+### Додаткові завдання
+
+**1. Декоратор `CachingOrderStore`.** Приймає будь-який `IOrderStore` у
+конструкторі й реалізує той самий контракт. Читання (`List`, `GetById`, навіть
+відсутній запис) кешуються, зміни спершу йдуть у внутрішнє сховище і лише після
+успіху скидають кеш. Лічильники `Hits` / `Misses` показують ефект:
+
+```
+Сховище: CachingOrderStore → FileOrderStore (.../data/orders.json)
+...
+Кеш: влучань 6, промахів 8
+```
+
+Ні сервіс, ні сценарій про декоратор не знають — його додає один рядок у
+composition root.
+
+**2. Пошук з `Func<Order, bool>`.** `OrderService.Search(predicate)` фільтрує
+`store.List()` за довільною умовою; сценарій шукає підтверджені замовлення на
+суму понад 10 000 грн:
+
+```csharp
+service.Search(order => order.Status == OrderStatus.Confirmed && order.Total > 10000m);
+```
+
 ## Предметна область
 
 **Замовлення** — оформлення замовлень клієнтів і підрахунок їхніх сум.
@@ -310,7 +574,7 @@ error CS1061: 'IReadOnlyList<OrderLine>' does not contain a definition for 'Add'
 dotnet build                                   # усе рішення, обидва TFM
 dotnet build src/Core/Core.csproj              # лише бібліотека
 dotnet run --project src/Cli -f net10.0        # запуск застосунку
-dotnet run --project src/Cli -f net10.0 -- --json   # ті самі дані одним рядком JSON
+dotnet run --project src/Cli -f net10.0 -- --env --json   # середовище одним рядком JSON
 ```
 
 Обидва проєкти багатоцільові, тому `-f` обовʼязковий: без нього `dotnet run`
