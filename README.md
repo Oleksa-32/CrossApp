@@ -38,14 +38,18 @@ CrossApp/
         InMemoryOrderStore.cs   словник у пам'яті, початкові дані через конструктор
         FileOrderStore.cs       кеш + JSON-файл, запис після кожної зміни
         CachingOrderStore.cs    декоратор над будь-яким IOrderStore (додаткове завдання)
+      Events/               дані доменних подій (тиждень 6)
+        OrderChangeKind.cs  Created / LineAdded / Confirmed / Cancelled
+        OrderChangedEventArgs.cs  OrderId, Kind, LinesCount, Total, Delta, At
       Services/
-        OrderService.cs     CreateOrder / AddLine / Confirm / Cancel / Find / Search
+        OrderService.cs     CreateOrder / AddLine / Confirm / Cancel / Find / Search + event Changed
       SampleData.cs         10 товарів і 16 замовлень для демо і тижня 7
     Cli/                    консольний застосунок (net8.0;net10.0)
       Cli.csproj            містить ProjectReference на Core
       Program.cs            composition root + вибір режиму
       DomainDemo.cs         сценарії «успіх» і «порушення інваріантів» (тиждень 4)
       OrderScenario.cs      сценарій сервісу і сценарій відмови (тиждень 5)
+      EventScenario.cs      підписники, відписка, відмова без події (тиждень 6, --events)
   data/
     sample.csv              13 рядків даних, з них 3 навмисно пошкоджені
     sample.json             той самий домен у JSON (додаткове завдання)
@@ -60,6 +64,7 @@ CrossApp/
 Файл сховища `data/orders.json` з'являється не в корені репозиторію, а поруч зі
 зібраним застосунком (`src/Cli/bin/Debug/net10.0/data/`), бо шлях будується від
 `AppContext.BaseDirectory`. У git він не потрапляє — `bin/` ігнорується.
+Так само поруч зі збіркою створюється журнал подій `logs/app.log` (тиждень 6).
 
 ## Імпорт даних (лабораторна 3)
 
@@ -554,6 +559,145 @@ composition root.
 ```csharp
 service.Search(order => order.Status == OrderStatus.Confirmed && order.Total > 10000m);
 ```
+
+## Доменні події (лабораторна 6)
+
+```bash
+dotnet run --project src/Cli -f net10.0 -- --events            # сховище в пам'яті
+dotnet run --project src/Cli -f net10.0 -- --events --file     # те саме з FileOrderStore
+cat src/Cli/bin/Debug/net10.0/logs/app.log                     # журнал подій
+```
+
+`OrderService` сповіщає зовнішній код про зміни подією `Changed`, але не знає,
+хто і як ці сповіщення обробить. Зараз підписники — консоль і файл
+`logs/app.log` у `Cli`; на тижні 10 підпишеться логер проєкту Api, на тижні 12 —
+компонент Blazor, що оновлює таблицю замовлень. Core для цього не змінюється.
+
+| Роль | Тип | Де |
+|---|---|---|
+| Вид зміни | `enum OrderChangeKind { Created, LineAdded, Confirmed, Cancelled }` | `src/Core/Events/OrderChangeKind.cs` |
+| Дані події | `OrderChangedEventArgs : EventArgs` | `src/Core/Events/OrderChangedEventArgs.cs` |
+| Видавець | `OrderService.Changed` + `OnChanged` | `src/Core/Services/OrderService.cs` |
+| Підписники, відписка, журнал | `EventScenario`, `PrepareLogPath` | `src/Cli/EventScenario.cs`, `src/Cli/Program.cs` |
+
+### Які зміни — події
+
+Подією є кожна успішна операція, що змінює замовлення: створення, додавання
+рядка, підтвердження, скасування. Саме вони змінюють те, що бачить користувач
+(суму, кількість рядків, стан). Читання (`Find`, `All`, `Search`) подій не дає.
+`OrderChangedEventArgs` несе `OrderId`, `Kind`, `LinesCount`, `Total` (нова
+сума), `Delta` (на скільки змінилася сума) і `At`. `At` береться з
+`TimeProvider` сервісу, а не з `DateTimeOffset.Now`, щоб тести тижня 8 могли
+перевірити й час.
+
+### Оголошення і підняття
+
+```csharp
+public event EventHandler<OrderChangedEventArgs>? Changed;
+
+private void OnChanged(Order order, OrderChangeKind kind, decimal delta) =>
+    Changed?.Invoke(this, new OrderChangedEventArgs(
+        order.Id, kind, order.Lines.Count, order.Total, delta, _clock.GetLocalNow()));
+
+public Order AddLine(string orderId, Product product, int quantity)
+{
+    Order order = Get(orderId);
+    decimal totalBefore = order.Total;
+    order.AddLine(product, quantity);   // якщо інваріант кине виняток — події не буде
+    _store.Update(order);
+    OnChanged(order, OrderChangeKind.LineAdded, order.Total - totalBefore);
+    return order;
+}
+```
+
+`OnChanged` стоїть останнім рядком перед `return`: після інваріантів сутності
+і після запису в сховище. Якщо впав будь-який із цих кроків, сповіщення немає.
+
+### Підписники
+
+```csharp
+void OnOrderChanged(object? sender, OrderChangedEventArgs e)
+{
+    string line = $"{e.At:HH:mm:ss} {e.Kind,-9} {e.OrderId} {e.Delta,10:+0.00;-0.00} " +
+                  $"→ сума {e.Total:F2} грн, рядків {e.LinesCount}";
+    Console.WriteLine(line);
+    File.AppendAllText(logPath, line + Environment.NewLine);
+}
+
+service.Changed += OnOrderChanged;          // 1: журнал (локальна функція)
+service.Changed += (_, _) => changes++;     // 2: лічильник (лямбда із замиканням)
+```
+
+Шлях журналу будує `Program.PrepareLogPath()`:
+`Path.Combine(AppContext.BaseDirectory, "logs", "app.log")` і
+`Directory.CreateDirectory(...)`. Кожен запуск дописує рядок `--- запуск … ---`.
+
+### Вивід
+
+```
+Сховище: InMemoryOrderStore (у пам'яті)
+Журнал: .../src/Cli/bin/Debug/net10.0/logs/app.log
+
+=== Підписка: журнал (локальна функція), потім лічильник (лямбда) ===
+00:11:37 Created   O-3FD12257      +0.00 → сума 0.00 грн, рядків 0
+00:11:37 LineAdded O-3FD12257  +24999.00 → сума 24999.00 грн, рядків 1
+00:11:37 LineAdded O-3FD12257   +1799.00 → сума 26798.00 грн, рядків 2
+Подій отримано: 3
+Порядок: журнал під час останньої події бачив лічильник = 2, лямбда збільшила його вже після журналу
+
+=== Сценарій відмови: виняток є, рядка події немає ===
+  AddLine з нульовою кількістю: помилка — Кількість товару P-002 у рядку має бути більшою за нуль (Parameter 'quantity') Actual value was 0.
+  AddLine("O-404", ...): помилка — Немає замовлення з id=O-404.
+  Confirm("O-404"): помилка — Немає замовлення з id=O-404.
+Подій отримано: 3 (нових після відмов: 0)
+
+=== Відписка: service.Changed -= OnOrderChanged ===
+Подій отримано: 4 (+1 лише від лямбди-лічильника)
+Дані змінилися: O-3FD12257 клієнт C-012 від 2026-10-20 — підтверджене, рядків 2, сума 26798.00 грн
+Після «-= (_, _) => changes++» і Cancel: 5 — лічильник досі підписаний
+
+=== Func замість події: Search(order => order.Total < 2000) ===
+  O-007 клієнт C-002 від 2026-09-13 — чернетка, рядків 1, сума 1799.00 грн
+  O-010 клієнт C-004 від 2026-09-19 — чернетка, рядків 0, сума 0.00 грн
+  O-015 клієнт C-003 від 2026-09-29 — скасоване, рядків 0, сума 0.00 грн
+Знайдено: 3
+```
+
+`logs/app.log` після запуску:
+
+```
+--- запуск 2026-10-20 00:11:37 ---
+00:11:37 Created   O-3FD12257      +0.00 → сума 0.00 грн, рядків 0
+00:11:37 LineAdded O-3FD12257  +24999.00 → сума 24999.00 грн, рядків 1
+00:11:37 LineAdded O-3FD12257   +1799.00 → сума 26798.00 грн, рядків 2
+```
+
+Підтвердження і скасування після `-=` у журнал не потрапили, хоча стан
+замовлення змінився. Рядок `-= (_, _) => changes++` підписку не знімає: нова
+лямбда є іншим екземпляром делегата, тому `Cancel` знову збільшив лічильник.
+
+### Подія чи прямий виклик логера
+
+Якби сервіс сам викликав логер, Core залежав би від конкретного способу виводу:
+кожен новий одержувач (логер Api, таблиця Blazor) вимагав би правки й
+перекомпіляції `OrderService`. Подія перевертає залежність: Core лише каже
+«замовлення змінилося», а `Cli`, Api чи Blazor підписуються самі. Друге:
+у тесті достатньо підписатися лямбдою і перевірити отримані `OrderChangedEventArgs`,
+без підміни консолі чи читання файлу. Ціна — обробники викликаються синхронно,
+по черзі, і виняток в одному з них зупинить наступні та дійде до того, хто
+викликав операцію сервісу.
+
+### Самоперевірка
+
+| Перевірка | Результат |
+|---|---|
+| `grep -rn "Console\|logs" src/Core` | порожньо |
+| Кожна успішна операція | рівно один рядок журналу / +1 до лічильника |
+| Операція з порушеним інваріантом або неіснуючим id | помилка є, рядка події немає, лічильник не змінився |
+| Після `-= OnOrderChanged` | журнал мовчить, дані змінюються |
+| `Changed` | `public event EventHandler<OrderChangedEventArgs>?`, не поле делегата |
+| `Func` у сигнатурі | `OrderService.Search(Func<Order, bool> predicate)` |
+| `dotnet build` (net8.0 і net10.0) | 0 Warning(s), 0 Error(s) |
 
 ## Предметна область
 

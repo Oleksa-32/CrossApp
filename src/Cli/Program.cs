@@ -35,7 +35,10 @@ string[] paths = args.Where(argument => !argument.StartsWith("--")).ToArray();
 // Імпорт лабораторної 3 — за прапорцем --import або коли передано шлях до файлу.
 bool import = args.Contains("--import", StringComparer.OrdinalIgnoreCase) || paths.Length > 0;
 
-// Типовий режим (лабораторна 5). Composition root: єдине місце, де названо
+// Режим лабораторної 6: події сервісу, підписка, відписка, журнал logs/app.log.
+bool events = args.Contains("--events", StringComparer.OrdinalIgnoreCase);
+
+// Типовий режим (лабораторна 5) і --events. Composition root: єдине місце, де названо
 // конкретні класи сховищ; далі сервіс і сценарій бачать лише IOrderStore.
 if (!mixed && !domain && !import)
 {
@@ -52,7 +55,9 @@ if (!mixed && !domain && !import)
     Console.WriteLine($"Сховище: {store}");
     try
     {
-        int exitCode = OrderScenario.Run(service, store, SampleData.Products());
+        int exitCode = events
+            ? EventScenario.Run(service, SampleData.Products(), PrepareLogPath())
+            : OrderScenario.Run(service, store, SampleData.Products());
         if (store is CachingOrderStore caching)
             Console.WriteLine($"Кеш: влучань {caching.Hits}, промахів {caching.Misses}");
         return exitCode;
@@ -112,6 +117,14 @@ Console.WriteLine($"Підсумок: усього {result.TotalRows}, прий�
                   $"пропущено {result.Errors.Count} ({result.ErrorRate:F1} % помилок)");
 
 return 0;
+
+// Журнал подій — справа Cli: Core не знає ні про файл, ні про каталог logs.
+static string PrepareLogPath()
+{
+    string logPath = Path.Combine(AppContext.BaseDirectory, "logs", "app.log");
+    Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+    return logPath;
+}
 
 static int PrintMixed(MixedImportResult result, string path)
 {

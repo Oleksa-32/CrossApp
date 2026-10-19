@@ -75,8 +75,8 @@ internal static class OrderScenario
             Console.WriteLine($"    {line}");
     }
 
-    // Користувач бачить зрозумілий текст замість стека виклику.
-    private static void TryDo(string title, Action action)
+    // Користувач бачить зрозумілий текст замість стека виклику. internal — спільне з EventScenario.
+    internal static void TryDo(string title, Action action)
     {
         try
         {
