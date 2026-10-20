@@ -21,7 +21,10 @@ public static class ProductCsvImporter
     /// Читає файл повністю і повертає прочитані товари разом із переліком помилок.
     /// Виняток не кидається: пошкоджений рядок стає записом у Errors.
     /// </summary>
-    public static ImportResult<ProductDto> Load(string path)
+    /// <param name="onSkipped">Необов'язковий зворотний виклик: отримує опис кожного
+    /// пропущеного рядка в момент пропуску. Що з ним робити — друкувати, писати у
+    /// файл звіту чи рахувати — вирішує викликач; Core лише повідомляє.</param>
+    public static ImportResult<ProductDto> Load(string path, Action<string>? onSkipped = null)
     {
         var items = new List<ProductDto>();
         var errors = new List<string>();
@@ -48,7 +51,9 @@ public static class ProductCsvImporter
                     items.Add(ok.Value);
                     break;
                 case ParseFailed failed:
-                    errors.Add($"рядок {number}: {failed.Reason}");
+                    string error = $"рядок {number}: {failed.Reason}";
+                    errors.Add(error);
+                    onSkipped?.Invoke(error);
                     break;
             }
         }

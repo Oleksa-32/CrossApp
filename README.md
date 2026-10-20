@@ -34,6 +34,7 @@ CrossApp/
         ProductCatalog.cs   ImportResult<ProductDto> → ImportResult<Product> (додаткові завдання)
       Abstractions/         контракти (тиждень 5)
         IOrderStore.cs      List / GetById / Add / Update / Remove
+        INotificationSink.cs    одержувач сповіщень через конструктор (тиждень 6, додатково)
       Storage/              реалізації сховищ (тиждень 5)
         InMemoryOrderStore.cs   словник у пам'яті, початкові дані через конструктор
         FileOrderStore.cs       кеш + JSON-файл, запис після кожної зміни
@@ -50,6 +51,10 @@ CrossApp/
       DomainDemo.cs         сценарії «успіх» і «порушення інваріантів» (тиждень 4)
       OrderScenario.cs      сценарій сервісу і сценарій відмови (тиждень 5)
       EventScenario.cs      підписники, відписка, відмова без події (тиждень 6, --events)
+      ChangeLog.cs          формат рядка журналу і безпечний дозапис у файл (тиждень 6)
+      ConsoleSink.cs        INotificationSink → консоль (тиждень 6, додатково)
+      FileSink.cs           INotificationSink → logs/sink.log (тиждень 6, додатково)
+      SinkScenario.cs       сценарій з одержувачем через конструктор (--sink-console / --sink-file)
   data/
     sample.csv              13 рядків даних, з них 3 навмисно пошкоджені
     sample.json             той самий домен у JSON (додаткове завдання)
@@ -64,7 +69,8 @@ CrossApp/
 Файл сховища `data/orders.json` з'являється не в корені репозиторію, а поруч зі
 зібраним застосунком (`src/Cli/bin/Debug/net10.0/data/`), бо шлях будується від
 `AppContext.BaseDirectory`. У git він не потрапляє — `bin/` ігнорується.
-Так само поруч зі збіркою створюється журнал подій `logs/app.log` (тиждень 6).
+Так само поруч зі збіркою створюються журнали `logs/app.log`, `logs/sink.log` і
+`logs/import-skipped.log` (тиждень 6).
 
 ## Імпорт даних (лабораторна 3)
 
@@ -618,17 +624,16 @@ public Order AddLine(string orderId, Product product, int quantity)
 ```csharp
 void OnOrderChanged(object? sender, OrderChangedEventArgs e)
 {
-    string line = $"{e.At:HH:mm:ss} {e.Kind,-9} {e.OrderId} {e.Delta,10:+0.00;-0.00} " +
-                  $"→ сума {e.Total:F2} грн, рядків {e.LinesCount}";
+    string line = ChangeLog.Format(e);   // "{e.At:HH:mm:ss} {e.Kind,-9} {e.OrderId} {e.Delta,10:+0.00;-0.00} → сума …"
     Console.WriteLine(line);
-    File.AppendAllText(logPath, line + Environment.NewLine);
+    ChangeLog.TryAppend(logPath, line);  // помилку диска перехоплено, операція сервісу не ламається
 }
 
 service.Changed += OnOrderChanged;          // 1: журнал (локальна функція)
 service.Changed += (_, _) => changes++;     // 2: лічильник (лямбда із замиканням)
 ```
 
-Шлях журналу будує `Program.PrepareLogPath()`:
+Шлях журналу будує `Program.PrepareLogPath("app.log")`:
 `Path.Combine(AppContext.BaseDirectory, "logs", "app.log")` і
 `Directory.CreateDirectory(...)`. Кожен запуск дописує рядок `--- запуск … ---`.
 
@@ -698,6 +703,105 @@ service.Changed += (_, _) => changes++;     // 2: лічильник (лямбд
 | `Changed` | `public event EventHandler<OrderChangedEventArgs>?`, не поле делегата |
 | `Func` у сигнатурі | `OrderService.Search(Func<Order, bool> predicate)` |
 | `dotnet build` (net8.0 і net10.0) | 0 Warning(s), 0 Error(s) |
+
+### Додаткові завдання
+
+**1. `INotificationSink` замість події.** Контракт `Core/Abstractions/INotificationSink.cs`
+з одним методом `void Notify(OrderChangedEventArgs change)`; реалізації
+`ConsoleSink` і `FileSink(path)` лежать у `Cli`, бо Core не знає про консоль і
+файли. Cli передає одержувача сервісу через конструктор — ручний DI, як сховище
+на тижні 5:
+
+```csharp
+public sealed class OrderService(IOrderStore store, TimeProvider clock, INotificationSink? sink = null)
+
+INotificationSink? sink = (sinkToFile, sinkToConsole) switch
+{
+    (true, _) => new FileSink(PrepareLogPath("sink.log")),
+    (_, true) => new ConsoleSink(),
+    _ => null
+};
+var service = new OrderService(store, TimeProvider.System, sink);
+```
+
+```bash
+dotnet run --project src/Cli -f net10.0 -- --sink-console    # сповіщення в консоль
+dotnet run --project src/Cli -f net10.0 -- --sink-file       # сповіщення в logs/sink.log
+```
+
+```
+Одержувач сповіщень (через конструктор): ConsoleSink (консоль)
+
+=== Операції ===
+12:29:15 Created   O-94FCD2BD      +0.00 → сума 0.00 грн, рядків 0
+12:29:15 LineAdded O-94FCD2BD  +24999.00 → сума 24999.00 грн, рядків 1
+12:29:15 LineAdded O-94FCD2BD   +1799.00 → сума 26798.00 грн, рядків 2
+12:29:15 Confirmed O-94FCD2BD      +0.00 → сума 26798.00 грн, рядків 2
+
+=== Сценарій відмови: виняток є, сповіщення немає ===
+  AddLine у підтверджене замовлення: помилка — Замовлення O-94FCD2BD має стан «підтверджене»: додавати рядки можна лише в чернетці
+```
+
+| | Подія `Changed` | `INotificationSink` через конструктор |
+|---|---|---|
+| Скільки одержувачів | 0…N | один (або `null`) |
+| Коли задається | будь-коли, `+=` / `-=` | один раз, під час створення сервісу |
+| Відписка | `-=` | немає; лише новий сервіс |
+| Залежність сервісу | лише від `EventArgs` | від інтерфейсу `INotificationSink` |
+| Видно з конструктора | ні | так — залежність явна |
+| Тест | підписатися лямбдою | передати фейковий sink |
+| Підходить для | сповіщень «кому цікаво» (UI, лог) | обов'язкової дії, без якої операція неповна |
+
+Обидва варіанти зберігають головне: Core не знає, куди йде повідомлення.
+Подія гнучкіша для випадкових підписників (таблиця Blazor з'являється і зникає
+разом зі сторінкою), sink — для одного обов'язкового одержувача, якого
+DI-контейнер тижня 10 підставить сам.
+
+**2. `Action<string>` у методі імпорту.** `ProductCsvImporter.Load(path, Action<string>? onSkipped = null)`
+і так само `ProductJsonImporter.Load` викликають `onSkipped` для кожного
+пропущеного рядка. Core лише повідомляє; Cli передає лямбду, що пише звіт у
+`logs/import-skipped.log`:
+
+```csharp
+Action<string> reportSkipped = reason => ChangeLog.TryAppend(skippedReportPath, reason);
+ImportResult<ProductDto> result = ProductCsvImporter.Load(path, reportSkipped);
+```
+
+```
+--- імпорт .../data/sample.csv 2026-10-20 12:29:19 ---
+рядок 12: очікую 3 колонки, отримав 2
+рядок 13: ціна 'безкоштовно' не є невід'ємним числом
+рядок 14: ідентифікатор або назва порожні
+```
+
+Тут `Action`, а не `Func`: від викликача відповідь не потрібна, і не подія:
+одержувач потрібен лише на час одного виклику `Load`, підписуватися назавжди
+немає на що (метод статичний).
+
+**3. Чому async-обробник події — це `async void` і чим це небезпечно.**
+Делегат `EventHandler<T>` повертає `void`, тому асинхронний обробник можна
+записати лише як `service.Changed += async (_, e) => await SaveAsync(e);` — це
+`async void`. Наслідки:
+
+- `Changed?.Invoke` не чекає завершення: керування повертається сервісу на
+  першому `await`, і операція вважається завершеною, хоча запис ще триває;
+  порядок обробників перестає бути гарантованим.
+- Винятку після `await` нікуди повернутися: `Task` немає, `try/catch` навколо
+  операції сервісу його не зловить. Виняток іде в `SynchronizationContext`, а в
+  консолі — у пул потоків, і це аварійно завершує процес.
+- Тест не може дочекатися обробника: `await` на `async void` неможливий.
+
+Тому в async-обробнику весь код загортають у `try/catch`, а коли результат
+справді треба дочекатися, замість події беруть `Func<OrderChangedEventArgs, Task>`
+або асинхронний інтерфейс на кшталт `Task NotifyAsync(...)` (детально — тиждень 8).
+
+**Безпечний підписник.** Обробник викликається синхронно всередині операції
+сервісу, тож виняток у ньому зламав би вже успішну операцію і зупинив би
+наступних підписників. Тому запис у файл іде через `ChangeLog.TryAppend`, що
+перехоплює `IOException` / `UnauthorizedAccessException`. Перевірка: файл
+`logs/app.log` лише для читання (`chmod 444`) — програма друкує
+`! не вдалося записати в …/app.log: Access … is denied.`, а сценарій
+доходить до кінця з кодом виходу 0.
 
 ## Предметна область
 

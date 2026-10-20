@@ -38,6 +38,10 @@ bool import = args.Contains("--import", StringComparer.OrdinalIgnoreCase) || pat
 // Режим лабораторної 6: події сервісу, підписка, відписка, журнал logs/app.log.
 bool events = args.Contains("--events", StringComparer.OrdinalIgnoreCase);
 
+// Додаткове завдання 1 лабораторної 6: одержувач сповіщень через конструктор сервісу.
+bool sinkToConsole = args.Contains("--sink-console", StringComparer.OrdinalIgnoreCase);
+bool sinkToFile = args.Contains("--sink-file", StringComparer.OrdinalIgnoreCase);
+
 // Типовий режим (лабораторна 5) і --events. Composition root: єдине місце, де названо
 // конкретні класи сховищ; далі сервіс і сценарій бачать лише IOrderStore.
 if (!mixed && !domain && !import)
@@ -50,14 +54,23 @@ if (!mixed && !domain && !import)
         : new InMemoryOrderStore(SampleData.Orders());
     if (args.Contains("--cache", StringComparer.OrdinalIgnoreCase))
         store = new CachingOrderStore(store);
-    var service = new OrderService(store, TimeProvider.System);
+    INotificationSink? sink = (sinkToFile, sinkToConsole) switch
+    {
+        (true, _) => new FileSink(PrepareLogPath("sink.log")),
+        (_, true) => new ConsoleSink(),
+        _ => null
+    };
+    var service = new OrderService(store, TimeProvider.System, sink);
 
     Console.WriteLine($"Сховище: {store}");
     try
     {
-        int exitCode = events
-            ? EventScenario.Run(service, SampleData.Products(), PrepareLogPath())
-            : OrderScenario.Run(service, store, SampleData.Products());
+        int exitCode = (sink, events) switch
+        {
+            (not null, _) => SinkScenario.Run(service, sink, SampleData.Products()),
+            (_, true) => EventScenario.Run(service, SampleData.Products(), PrepareLogPath("app.log")),
+            _ => OrderScenario.Run(service, store, SampleData.Products())
+        };
         if (store is CachingOrderStore caching)
             Console.WriteLine($"Кеш: влучань {caching.Hits}, промахів {caching.Misses}");
         return exitCode;
@@ -91,11 +104,17 @@ if (domain)
 if (mixed)
     return PrintMixed(MixedCsvImporter.Load(path), path);
 
+// Додаткове завдання 2 лабораторної 6: імпортер повідомляє про кожен пропущений
+// рядок через Action<string>, а Cli вирішує, що з цим робити, — пише файл звіту.
+string skippedReportPath = PrepareLogPath("import-skipped.log");
+ChangeLog.TryAppend(skippedReportPath, $"--- імпорт {Path.GetFullPath(path)} {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} ---");
+Action<string> reportSkipped = reason => ChangeLog.TryAppend(skippedReportPath, reason);
+
 // Формат обирається за розширенням — знову switch expression з константними патернами.
 ImportResult<ProductDto> result = Path.GetExtension(path).ToLowerInvariant() switch
 {
-    ".csv" => ProductCsvImporter.Load(path),
-    ".json" => ProductJsonImporter.Load(path),
+    ".csv" => ProductCsvImporter.Load(path, reportSkipped),
+    ".json" => ProductJsonImporter.Load(path, reportSkipped),
     string other => new ImportResult<ProductDto>([], [$"невідоме розширення '{other}': очікую .csv або .json"])
 };
 
@@ -115,13 +134,14 @@ if (result.Errors.Count > 0)
 // Статистика імпорту одним рядком — заготовка під звіти сьомого тижня.
 Console.WriteLine($"Підсумок: усього {result.TotalRows}, прийнято {result.Items.Count}, " +
                   $"пропущено {result.Errors.Count} ({result.ErrorRate:F1} % помилок)");
+Console.WriteLine($"Звіт про пропущені рядки: {skippedReportPath}");
 
 return 0;
 
-// Журнал подій — справа Cli: Core не знає ні про файл, ні про каталог logs.
-static string PrepareLogPath()
+// Журнали — справа Cli: Core не знає ні про файл, ні про каталог logs.
+static string PrepareLogPath(string fileName)
 {
-    string logPath = Path.Combine(AppContext.BaseDirectory, "logs", "app.log");
+    string logPath = Path.Combine(AppContext.BaseDirectory, "logs", fileName);
     Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
     return logPath;
 }

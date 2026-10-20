@@ -13,10 +13,13 @@ namespace Core.Services;
 /// </summary>
 /// <param name="store">Будь-яка реалізація сховища: пам'ять, файл, згодом — БД.</param>
 /// <param name="clock">Джерело поточного часу; тести восьмого тижня передадуть фіксований.</param>
-public sealed class OrderService(IOrderStore store, TimeProvider clock)
+/// <param name="sink">Необов'язковий одержувач сповіщень (додаткове завдання 1):
+/// альтернатива події, що приходить через конструктор.</param>
+public sealed class OrderService(IOrderStore store, TimeProvider clock, INotificationSink? sink = null)
 {
     private readonly IOrderStore _store = store ?? throw new ArgumentNullException(nameof(store));
     private readonly TimeProvider _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+    private readonly INotificationSink? _sink = sink;
 
     /// <summary>
     /// Піднімається рівно один раз після кожної УСПІШНОЇ зміни замовлення.
@@ -75,10 +78,14 @@ public sealed class OrderService(IOrderStore store, TimeProvider clock)
         return _store.List().Where(predicate).ToList();
     }
 
-    // Єдине місце, де подію викликають. ?. — підписників може не бути, і це нормально.
-    private void OnChanged(Order order, OrderChangeKind kind, decimal delta) =>
-        Changed?.Invoke(this, new OrderChangedEventArgs(
-            order.Id, kind, order.Lines.Count, order.Total, delta, _clock.GetLocalNow()));
+    // Єдине місце, де подію викликають. ?. — ні sink, ні підписників може не бути, і це нормально.
+    private void OnChanged(Order order, OrderChangeKind kind, decimal delta)
+    {
+        var change = new OrderChangedEventArgs(
+            order.Id, kind, order.Lines.Count, order.Total, delta, _clock.GetLocalNow());
+        _sink?.Notify(change);
+        Changed?.Invoke(this, change);
+    }
 
     // Для Find відсутність — нормальний результат (null), для операцій зміни — відмова.
     private Order Get(string id) =>

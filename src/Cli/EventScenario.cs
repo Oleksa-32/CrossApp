@@ -19,20 +19,20 @@ internal static class EventScenario
         Product laptop = catalog[0];
         Product mouse = catalog[1];
 
-        File.AppendAllText(logPath, $"--- запуск {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} ---{Environment.NewLine}");
+        ChangeLog.TryAppend(logPath, $"--- запуск {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss} ---");
 
         int changes = 0;
         int changesSeenByJournal = 0;
 
         // Підписник 1 — журнал. Локальна функція має стале ім'я, тому той самий
-        // делегат можна передати і в +=, і в -=.
+        // делегат можна передати і в +=, і в -=. Помилку запису у файл перехоплює
+        // TryAppend: виняток у підписнику не повинен ламати операцію сервісу.
         void OnOrderChanged(object? sender, OrderChangedEventArgs e)
         {
             changesSeenByJournal = changes;
-            string line = $"{e.At:HH:mm:ss} {e.Kind,-9} {e.OrderId} {e.Delta,10:+0.00;-0.00} " +
-                          $"→ сума {e.Total:F2} грн, рядків {e.LinesCount}";
+            string line = ChangeLog.Format(e);
             Console.WriteLine(line);
-            File.AppendAllText(logPath, line + Environment.NewLine);
+            ChangeLog.TryAppend(logPath, line);
         }
 
         Console.WriteLine($"Журнал: {logPath}");

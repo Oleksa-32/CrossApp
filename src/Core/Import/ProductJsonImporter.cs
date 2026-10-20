@@ -12,7 +12,8 @@ public static class ProductJsonImporter
 {
     private static readonly JsonSerializerOptions Options = new() { PropertyNameCaseInsensitive = true };
 
-    public static ImportResult<ProductDto> Load(string path)
+    /// <param name="onSkipped">Як у ProductCsvImporter.Load: опис кожного пропущеного елемента.</param>
+    public static ImportResult<ProductDto> Load(string path, Action<string>? onSkipped = null)
     {
         string json = File.ReadAllText(path, Encoding.UTF8);
 
@@ -26,7 +27,9 @@ public static class ProductJsonImporter
         {
             // Пошкоджений JSON неподільний: на відміну від CSV, тут немає «рядка»,
             // який можна пропустити, тому весь файл стає однією помилкою.
-            return new ImportResult<ProductDto>([], [$"файл не є коректним JSON: {ex.Message}"]);
+            string error = $"файл не є коректним JSON: {ex.Message}";
+            onSkipped?.Invoke(error);
+            return new ImportResult<ProductDto>([], [error]);
         }
 
         var items = new List<ProductDto>();
@@ -40,7 +43,9 @@ public static class ProductJsonImporter
                     items.Add(parsed[i]);
                     break;
                 case string reason:
-                    errors.Add($"елемент {i + 1}: {reason}");
+                    string error = $"елемент {i + 1}: {reason}";
+                    errors.Add(error);
+                    onSkipped?.Invoke(error);
                     break;
             }
         }
