@@ -44,7 +44,17 @@ CrossApp/
         OrderChangedEventArgs.cs  OrderId, Kind, LinesCount, Total, Delta, At
       Services/
         OrderService.cs     CreateOrder / AddLine / Confirm / Cancel / Find / Search + event Changed
-      SampleData.cs         10 товарів і 16 замовлень для демо і тижня 7
+      Reports/              звіти LINQ to Objects (тиждень 7)
+        OrderRow.cs         record-DTO рядка звіту про замовлення
+        GroupSummary.cs     record-DTO групи: Key, Count, Total
+        CustomerTotal.cs    record-DTO клієнта в топ-N
+        ProductSales.cs     record-DTO товару: штук і виручка
+        CustomerActivity.cs record-DTO GroupJoin клієнтів із замовленнями (додатково)
+        CustomerOrderRow.cs record-DTO Join замовлень з іменами клієнтів (додатково)
+        ReportService.cs    усі запити: фільтр, топ-N, GroupBy, агрегати, Join/GroupJoin
+        EnumerableExtensions.cs  метод-розширення TopBy (додатково)
+        ReportVariants.cs   варіанти звітів для вимірювань Stopwatch (додатково)
+      SampleData.cs         10 товарів, 8 клієнтів, 20 замовлень за три місяці; Generate(100 000)
     Cli/                    консольний застосунок (net8.0;net10.0)
       Cli.csproj            містить ProjectReference на Core
       Program.cs            composition root + вибір режиму
@@ -55,6 +65,9 @@ CrossApp/
       ConsoleSink.cs        INotificationSink → консоль (тиждень 6, додатково)
       FileSink.cs           INotificationSink → logs/sink.log (тиждень 6, додатково)
       SinkScenario.cs       сценарій з одержувачем через конструктор (--sink-console / --sink-file)
+      ReportCommands.cs     підкоманди report-* і вивід звітів (тиждень 7)
+      DeferredScenario.cs   демо відкладеного виконання (report-deferred)
+      BenchmarkScenario.cs  Stopwatch на 100 000 записів (report-bench, додатково)
   data/
     sample.csv              13 рядків даних, з них 3 навмисно пошкоджені
     sample.json             той самий домен у JSON (додаткове завдання)
@@ -363,7 +376,7 @@ public interface IOrderStore
 |---|---|---|
 | Де дані | `Dictionary<string, Order>` | кеш у пам'яті + файл JSON |
 | Скільки живуть | до виходу з програми | між запусками |
-| Початкові дані | `IEnumerable<Order>? seed` у конструкторі (`SampleData.Orders()`) | те, що є у файлі |
+| Початкові дані | `IEnumerable<Order>? seed` у конструкторі (`SampleData.Orders()`, 20 зразків з тижня 7) | те, що є у файлі |
 | Читання | зі словника | файл читається один раз, при першому зверненні |
 | Запис | у словник | у кеш, потім `Flush()` — увесь файл після кожної зміни |
 | Шлях | — | `AppContext.BaseDirectory/data/orders.json` |
@@ -461,7 +474,7 @@ var service = new OrderService(store, TimeProvider.System);
 
 ```
 Сховище: InMemoryOrderStore (у пам'яті)
-Замовлень на старті: 16
+Замовлень на старті: 20
 
 === Додати і змінити ===
 CreateOrder("C-007") → O-77B58E7C
@@ -478,10 +491,10 @@ Find("O-404") → не знайдено (null — нормальний резу�
   O-001 клієнт C-001 від 2026-09-01 — підтверджене, рядків 3, сума 27048.50 грн
   ...
   O-77B58E7C клієнт C-007 від 2026-10-13 — підтверджене, рядків 2, сума 27697.50 грн
-Усього: 17
+Усього: 21
 ```
 
-Повторний запуск знову починає з 16 зразків: створене замовлення зникло разом із процесом.
+Повторний запуск знову починає з 20 зразків: створене замовлення зникло разом із процесом.
 
 ### Вивід: файл, два запуски поспіль
 
@@ -662,10 +675,12 @@ service.Changed += (_, _) => changes++;     // 2: лічильник (лямбд
 Після «-= (_, _) => changes++» і Cancel: 5 — лічильник досі підписаний
 
 === Func замість події: Search(order => order.Total < 2000) ===
-  O-007 клієнт C-002 від 2026-09-13 — чернетка, рядків 1, сума 1799.00 грн
-  O-010 клієнт C-004 від 2026-09-19 — чернетка, рядків 0, сума 0.00 грн
-  O-015 клієнт C-003 від 2026-09-29 — скасоване, рядків 0, сума 0.00 грн
-Знайдено: 3
+  O-007 клієнт C-002 від 2026-09-25 — чернетка, рядків 1, сума 1799.00 грн
+  O-010 клієнт C-004 від 2026-10-07 — чернетка, рядків 0, сума 0.00 грн
+  O-015 клієнт C-003 від 2026-10-27 — скасоване, рядків 0, сума 0.00 грн
+  O-018 клієнт C-005 від 2026-11-08 — чернетка, рядків 1, сума 249.90 грн
+  O-020 клієнт C-006 від 2026-11-16 — скасоване, рядків 1, сума 899.50 грн
+Знайдено: 5
 ```
 
 `logs/app.log` після запуску:
@@ -802,6 +817,335 @@ ImportResult<ProductDto> result = ProductCsvImporter.Load(path, reportSkipped);
 `logs/app.log` лише для читання (`chmod 444`) — програма друкує
 `! не вдалося записати в …/app.log: Access … is denied.`, а сценарій
 доходить до кінця з кодом виходу 0.
+
+## Звіти через LINQ (лабораторна 7)
+
+```bash
+dotnet run --project src/Cli -f net10.0 -- report-top          # топ-5 клієнтів за сумою
+dotnet run --project src/Cli -f net10.0 -- report-expensive    # замовлення дорожчі за 10 000 грн
+dotnet run --project src/Cli -f net10.0 -- report-groups       # групування за станом
+dotnet run --project src/Cli -f net10.0 -- report-months       # виручка за місяцями
+dotnet run --project src/Cli -f net10.0 -- report-sum          # кількість, виручка, середній чек, максимум
+dotnet run --project src/Cli -f net10.0 -- report-deferred     # демо відкладеного виконання
+dotnet run --project src/Cli -f net10.0 -- report-groups --file    # ті самі звіти над FileOrderStore
+dotnet run --project src/Cli -f net10.0 -- report-sum --empty      # порожнє сховище — без винятку
+dotnet run --project src/Cli -f net10.0 -- report                  # перелік підкоманд
+```
+
+Варіант «Замовлення»: топ-5 клієнтів за сумою, замовлення дорожчі за N,
+групування за станом і за місяцем, середній чек і максимальне замовлення.
+
+| Роль | Тип | Де |
+|---|---|---|
+| Рядок звіту про замовлення | `record OrderRow(Id, CustomerId, CreatedOn, Status, LinesCount, Total)` | `src/Core/Reports/OrderRow.cs` |
+| Підсумок групи | `record GroupSummary(Key, Count, Total)` | `src/Core/Reports/GroupSummary.cs` |
+| Підсумок клієнта / товару | `record CustomerTotal`, `record ProductSales` | `src/Core/Reports/` |
+| Усі запити | `static class ReportService` | `src/Core/Reports/ReportService.cs` |
+| Підкоманди і вивід | `ReportCommands`, `DeferredScenario`, `BenchmarkScenario` | `src/Cli/` |
+
+Звіти лежать у Core і приймають `IEnumerable<Order>`, а не сховище: це чисті
+функції, які однаково працюють над `InMemoryOrderStore`, `FileOrderStore` чи
+100 000 згенерованих записів. Повертають `IReadOnlyList<DTO>` — уже готовий
+список, тому повторний `Count` у Cli нічого не перераховує. Звіти не знають про
+`Console`, а в `Program.cs` немає жодного `Where` чи `GroupBy`: він лише
+передає підкоманду в `ReportCommands`.
+
+### Перелік запитів
+
+| Метод | Питання | Оператори |
+|---|---|---|
+| `ExpensiveOrders(source, threshold)` | Які замовлення дорожчі за N? | `Where`, `OrderByDescending`, `ThenBy`, `Select` → `OrderRow` |
+| `TopCustomers(source, n)` | Які клієнти принесли найбільше грошей? | `Where`, `GroupBy`, `Count`, `Sum`, `TopBy` |
+| `TopOrders(source, n)` | Які замовлення найбільші? | `TopBy` (`OrderByDescending` + `ThenBy` + `Take`), `Select` |
+| `ByStatus(source)` | Скільки замовлень і на яку суму в кожному стані? | `GroupBy`, `Select` → `GroupSummary`, `OrderByDescending`, `ThenBy` |
+| `ByMonth(source)` | Яка виручка за кожен місяць? | `Where`, `GroupBy` за кортежем `(Year, Month)`, `OrderBy`, `Select` |
+| `TopProducts(source, n)` | Які товари продаються на найбільшу суму? | `Where`, `SelectMany`, `GroupBy`, `First`, `Sum`, `TopBy` |
+| `Totals(source)` | Скільки підтверджених, виручка, середній чек, найбільше замовлення? | `Where`, `Select`, `ToList`, `Sum`, `Average`, `Max` |
+| `ByStatusQuery(source)` | те саме, що `ByStatus` (додатково 3) | синтаксис запитів `from … group … into … orderby … select` |
+| `CustomerActivity(customers, orders)` | Скільки замовлень у кожного клієнта довідника, включно з тими, хто нічого не замовив? (додатково 1) | `GroupJoin`, `Count`, `Where`, `Sum`, `OrderByDescending`, `ThenBy` |
+| `OrdersWithCustomers(customers, orders, threshold)` | Чиї замовлення дорожчі за N — з іменами? (додатково 1) | `Where`, `Join`, `OrderByDescending`, `ThenBy` |
+
+Гроші приносять лише підтверджені замовлення, тому `TopCustomers`, `ByMonth`,
+`TopProducts` і `Totals` спершу відбирають `Status == Confirmed`. Фільтр стоїть
+**перед** групуванням і сортуванням: сортувати й групувати зайві елементи
+дорожче (виміряно нижче).
+
+### GroupBy з проєкцією
+
+```csharp
+public static IReadOnlyList<GroupSummary> ByStatus(IEnumerable<Order> source) =>
+    source.GroupBy(order => order.Status.ToString())
+          .Select(g => new GroupSummary(g.Key, g.Count(), g.Sum(order => order.Total)))
+          .OrderByDescending(summary => summary.Total).ThenBy(summary => summary.Key, StringComparer.Ordinal)
+          .ToList();
+```
+
+`GroupBy` розкладає замовлення на групи за значенням ключа (рядком стану, а не
+посиланням на об'єкт). У `Select` приходить уже група: `g.Key` — значення ключа
+(`"Confirmed"`), `g.Count()` — кількість замовлень у групі, `g.Sum(...)` — сума
+полів її елементів. Після `Select` кожен елемент — `GroupSummary`, і
+`OrderByDescending` сортує готові підсумки. `ByMonth` групує за кортежем
+`(order.CreatedOn.Year, order.CreatedOn.Month)` — кортежі порівнюються за
+значенням, тому всі вересневі замовлення потрапляють в одну групу.
+
+### Чому DTO, а не Order
+
+`OrderRow` фіксує форму рядка звіту: шість полів, стан рядком, як в `OrderDto`.
+`Order` має поведінку (`AddLine`, `Confirm`), список рядків і обчислювану суму —
+віддавши його назовні, звіт дозволив би викликачу змінити замовлення і прив'язав
+би відповідь Api (тиждень 10) до внутрішньої будови сутності. Проєкція описана
+в одному місці, `ReportService.ToRow`: зміниться сутність — зміниться лише цей метод.
+
+### Топ-N зі стабільним порядком
+
+```csharp
+source.OrderByDescending(keySelector).ThenBy(tieBreaker, StringComparer.Ordinal).Take(n);
+```
+
+Другий ключ — унікальний id, порівняний `Ordinal`, тому порядок не залежить ні
+від порядку елементів у словнику сховища, ні від мови ОС. Два запуски
+`report-top` дають побайтно однаковий вивід (перевірено порівнянням рядків).
+
+### Вивід
+
+```
+> report-top
+Топ-5 клієнтів за сумою підтверджених замовлень:
+  C-006  замовлень:   2   сума:   63127.78 грн
+  C-001  замовлень:   3   сума:   51759.80 грн
+  C-002  замовлень:   3   сума:   46688.90 грн
+  C-007  замовлень:   1   сума:   27248.00 грн
+  C-003  замовлень:   1   сума:   11748.90 грн
+
+> report-orders
+Топ-5 замовлень за сумою:
+  O-008  C-006  2026-09-29 Confirmed  рядків  2   56397.98 грн
+  O-019  C-002  2026-11-12 Confirmed  рядків  2   32889.90 грн
+  O-017  C-007  2026-11-04 Confirmed  рядків  2   27248.00 грн
+  O-001  C-001  2026-09-01 Confirmed  рядків  3   27048.50 грн
+  O-004  C-001  2026-09-13 Confirmed  рядків  2   19561.80 грн
+
+> report-expensive
+Замовлення дорожчі за 10000 грн:
+  O-008  C-006  2026-09-29 Confirmed  рядків  2   56397.98 грн
+  O-019  C-002  2026-11-12 Confirmed  рядків  2   32889.90 грн
+  O-017  C-007  2026-11-04 Confirmed  рядків  2   27248.00 грн
+  O-001  C-001  2026-09-01 Confirmed  рядків  3   27048.50 грн
+  O-004  C-001  2026-09-13 Confirmed  рядків  2   19561.80 грн
+  O-009  C-003  2026-10-03 Confirmed  рядків  2   11748.90 грн
+  O-002  C-002  2026-09-05 Confirmed  рядків  1   11499.00 грн
+
+> report-groups
+Замовлення за станом:
+  Confirmed  замовлень:  12   сумарно:  207222.97 грн
+  Cancelled  замовлень:   4   сумарно:   11990.39 грн
+  Draft      замовлень:   4   сумарно:    6798.70 грн
+
+> report-months
+Виручка за місяцями (підтверджені замовлення):
+  2026-09    замовлень:   5   сумарно:  117706.98 грн
+  2026-10    замовлень:   5   сумарно:   29378.09 грн
+  2026-11    замовлень:   2   сумарно:   60137.90 грн
+
+> report-products
+Топ-5 товарів за виручкою:
+  P-001  Ноутбук Lenovo IdeaPad 15           4 шт   99996.00 грн
+  P-006  Навушники Sony WH-1000XM4           4 шт   45996.00 грн
+  P-004  Монітор Dell P2422H 24"             3 шт   23672.70 грн
+  P-005  SSD Samsung 980 1TB                 3 шт    9599.97 грн
+  P-003  Клавіатура механічна Keychron K2    2 шт    8500.00 грн
+
+> report-sum
+  підтверджених 12, виручка 207222.97 грн, середній чек 17268.58 грн, макс 56397.98 грн
+```
+
+Перед кожним звітом друкується рядок `Сховище: …` — видно, над яким джерелом
+працює запит. Невідома підкоманда друкує перелік і завершується з кодом 1.
+
+### Порожнє джерело
+
+`Average` і `Max` для `decimal` на порожній послідовності кидають
+`InvalidOperationException`, `Sum` і `Count` повертають 0. `Totals` перевіряє
+`totals.Count == 0` і повертає кортеж нулів, не доходячи до `Average`:
+
+```
+> report-sum --empty
+  підтверджених 0, виручка 0.00 грн, середній чек 0.00 грн, макс 0.00 грн
+> report-expensive --empty
+Замовлення дорожчі за 10000 грн:
+  (порожньо)
+```
+
+Прапорець `--empty` змінює лише composition root:
+`new InMemoryOrderStore(empty ? [] : SampleData.Orders())`. Без винятку
+відпрацьовують усі підкоманди.
+
+### Відкладене виконання
+
+```
+> report-deferred
+Запит побудовано, умову перевірено разів: 0
+Дорожчих за 10000 до змін: 7 (перевірок: 20)
+Дорожчих за 10000 після source.Add: 8 (перевірок: 41)
+Після source.Clear(): query.Count() = 0, у знімку лишилось: 8
+snapshot.Count — властивість: перевірок після ToList не додалося (0)
+```
+
+Рядок `var query = source.Where(...)` нічого не виконує: лічильник у лямбді
+після нього дорівнює 0. Запит виконується лише тоді, коли його перебирають, —
+тут це кожен виклик `query.Count()` і `ToList()`. Перший `Count()` пройшов 20
+замовлень і знайшов 7; після `source.Add` другий `Count()` виконав той самий
+запит **заново** над 21 елементом (перевірок стало 41) і побачив нове
+замовлення O-999 — тому 7 і 8. `ToList()` зафіксував 8 елементів в окремому
+списку: після `source.Clear()` запит дає 0, а `snapshot.Count` — властивість,
+що читає збережене число, — так і лишається 8. У `ReportService` кожен метод
+закінчується `ToList` (або агрегатом), тому звіт виконується рівно один раз, у
+момент виклику, і Cli отримує вже знімок.
+
+### Самоперевірка
+
+| Перевірка | Результат |
+|---|---|
+| `grep -nE "\.Where\|GroupBy" src/Cli/Program.cs` | порожньо: шляхи і підкоманда — через `FirstOrDefault` |
+| Два запуски `report-top` | вивід однаковий |
+| `report-expensive --empty`, `report-sum --empty` | `(порожньо)` і нулі, код виходу 0 |
+| Типи результатів | `IReadOnlyList<OrderRow / CustomerTotal / GroupSummary / ProductSales / …>`, кортеж у `Totals` — жодного `Order` |
+| `grep -rn AsParallel src` | порожньо |
+| `grep -rn "Console\." src/Core` | порожньо |
+| Попередні режими (`--events`, `--domain`, `--import`, `--file`) | працюють; `report-*` теж приймає `--file` |
+| `dotnet build` (net8.0 і net10.0) | 0 Warning(s), 0 Error(s) |
+
+### Додаткові завдання
+
+**1. Join і GroupJoin.** `SampleData.Customers()` — довідник восьми клієнтів
+(`CustomerDto` тижня 3); C-008 навмисно без замовлень.
+
+```csharp
+customers.GroupJoin(orders,
+    customer => customer.Id,
+    order => order.CustomerId,
+    (customer, customerOrders) => new CustomerActivity(customer.Id, customer.Name,
+        customerOrders.Count(), customerOrders.Where(IsConfirmed).Sum(order => order.Total)),
+    StringComparer.OrdinalIgnoreCase)
+```
+
+```
+> report-customers
+Клієнти довідника та їхні замовлення (GroupJoin):
+  C-006  Софія Ткаченко   замовлень:   3   виручка:   63127.78 грн
+  C-001  Іван Петренко    замовлень:   3   виручка:   51759.80 грн
+  ...
+  C-005  Тарас Мельник    замовлень:   3   виручка:    3199.70 грн
+  C-008  Ірина Савчук     замовлень:   0   виручка:       0.00 грн
+
+> report-join
+Замовлення дорожчі за 10000 грн з іменами клієнтів (Join):
+  Софія Ткаченко   O-008  Confirmed    56397.98 грн
+  Олена Коваль     O-019  Confirmed    32889.90 грн
+  ...
+```
+
+`GroupJoin` віддає кожному клієнту групу його замовлень, і клієнт без
+замовлень теж лишається (порожня група → 0, як `LEFT JOIN`). `Join` — внутрішнє
+з'єднання: пара утворюється лише за збігу ключів, тож C-008 у `report-join`
+потрапити не може. Сортування імен свідомо не використано: `Ordinal` ставить
+`І` (U+0406) перед `А` (U+0410), а культурне порівняння залежало б від ОС.
+
+**2. Метод-розширення `TopBy`.** `src/Core/Reports/EnumerableExtensions.cs`:
+
+```csharp
+public static IEnumerable<T> TopBy<T, TKey>(this IEnumerable<T> source,
+    Func<T, TKey> keySelector, Func<T, string> tieBreaker, int n)
+```
+
+Використано в трьох звітах: `TopCustomers`, `TopOrders`, `TopProducts`. Другий
+ключ зроблено обов'язковим параметром, тому забути `ThenBy` у новому топ-N
+неможливо. Метод не містить `yield`, тому `ArgumentOutOfRangeException` на
+від'ємне `n` виникає одразу під час виклику, а сам запит лишається відкладеним
+до `ToList`.
+
+**3. Синтаксис запитів.** `ReportService.ByStatusQuery`:
+
+```csharp
+from order in source
+group order by order.Status.ToString() into g
+let total = g.Sum(order => order.Total)
+orderby total descending, g.Key
+select new GroupSummary(g.Key, g.Count(), total)
+```
+
+`report-query` друкує обидва варіанти і `Результати збігаються: True` —
+record порівнюються `SequenceEqual` за значенням. Порівняння читабельності:
+
+| | Методи | Запити |
+|---|---|---|
+| Групування з підсумком | ключ і агрегати в одному `Select(g => …)` | `group … by … into g` читається як речення, `let` дає ім'я сумі, і `g.Sum` рахується один раз для сортування і для результату |
+| Кілька ключів сортування | `OrderByDescending(...).ThenBy(...)` | `orderby total descending, g.Key` — коротше |
+| Компаратор (`StringComparer.Ordinal`) | передається другим аргументом | **передати неможливо**: `orderby g.Key` бере стандартне порівняння рядків з урахуванням культури |
+| `Take`, `First`, `ToList`, `TopBy` | частина ланцюжка | лише через дужки й виклик методу після запиту |
+
+Для звіту з групуванням у центрі синтаксис запитів справді читається легше. Для
+`TopCustomers`, `ExpensiveOrders` і всього з `Take`/`TopBy` ланцюжок методів
+природніший, а неможливість задати компаратор — вагома причина лишити в
+основному коді методи. Ключі станів — латиниця, тому тут результати збігаються.
+
+**4. Stopwatch на 100 000 записів.** `SampleData.Generate(100_000)` створює
+замовлення через ті самі `Order.Create` / `AddLine` / `Confirm` з фіксованим
+зерном `Random`. `BenchmarkScenario` для кожного варіанта робить 5 прогрівних
+запусків, перед кожним із 10 вимірів викликає `GC.Collect()` і друкує
+найкращий час. Варіанти — у `src/Core/Reports/ReportVariants.cs`.
+
+```bash
+dotnet run --project src/Cli -c Release -f net10.0 -- report-bench
+```
+
+```
+Згенеровано замовлень: 100000 за 102 мс
+Звіт «дорожчі за 30000 грн», найкращий час з 10 запусків:
+  Where → OrderBy → Select → ToList                20.44 мс   записів: 36563
+  Where → ToList → OrderBy → Select → ToList       16.81 мс   записів: 36563
+  OrderBy → Where → Select → ToList (помилка)      48.48 мс   записів: 36563
+  результати однакові: True
+Агрегати (кількість, сума, середнє, максимум):
+  один ToList, потім 4 агрегати                     4.00 мс   записів: 69945
+  4 агрегати по відкладеному запиту                12.18 мс   записів: 69945
+  результати однакові: True
+```
+
+| Порівняння | Час, мс (3 запуски) | Висновок |
+|---|---|---|
+| без `ToList` у середині | 20.4 – 25.7 | еталон |
+| з `ToList` після `Where` | 16.8 – 17.4 | на ~18 % **швидше** |
+| `OrderBy` до `Where` | 48.2 – 50.2 | у ~2,4 раза повільніше |
+| 4 агрегати по відкладеному запиту | 12.1 – 12.3 | у ~3 рази повільніше за один `ToList` |
+
+- `OrderBy` до `Where` сортує всі 100 000 елементів замість 36 563 і рахує
+  `Order.Total` для кожного — підтверджено, що фільтрувати треба спочатку.
+- Відкладений запит у `TotalsDeferred` проходиться чотири рази (`Any` — лише до
+  першого елемента), і кожного разу заново фільтрує й перераховує `Order.Total`
+  з рядків. Один `ToList` у `Totals` — один прохід.
+- Проміжний `ToList` після `Where` на цих даних не шкодить, а трохи пришвидшує.
+  Ймовірна причина: `OrderBy` над `List<T>` знає кількість елементів, тому і його
+  буфер, і підсумковий `ToList` після `Select` виділяються одразу потрібного
+  розміру, а над ітератором `Where` довжина невідома і масиви ростуть подвоєнням.
+  Ціна — ще один список на 36 563 посилання в пам'яті. Тобто «зайвий» `ToList`
+  перед буферизувальним оператором (`OrderBy`, `GroupBy`) майже нічого не
+  коштує, бо той однаково збирає всю послідовність.
+- Перше вимірювання без прогріву давало протилежний результат: повільнішим
+  виходив той варіант, що запускався першим, хоч би яким він був (перевірено
+  перестановкою). Причина — багаторівнева JIT-компіляція і збирання сміття,
+  тому прогрів і `GC.Collect()` перед виміром обов'язкові.
+
+### Що зміниться на тижні 11 (IQueryable)
+
+Над `IQueryable<Order>` з EF Core ті самі `Where`, `GroupBy`, `OrderBy`, `Select`
+провайдер перекладе на SQL (`WHERE`, `GROUP BY`, `ORDER BY`), і лямбди стануть
+деревами виразів, а не делегатами. Тому в них не можна буде викликати
+довільні методи C#: `Order.Total` (сума з рядків у пам'яті), `IsConfirmed`,
+`DateOnly.ToString("yyyy-MM")` і `StringComparer` у `GroupBy` SQL-провайдер
+не перекладе — їх доведеться замінити на вирази над колонками (`Sum` по
+`Lines`, `Year`/`Month`) або виконати після `ToList`/`AsEnumerable`. `ToList`
+наприкінці лишиться точкою, де відбувається запит до бази.
 
 ## Предметна область
 

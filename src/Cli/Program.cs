@@ -28,12 +28,19 @@ bool mixed = args.Contains("--mixed", StringComparer.OrdinalIgnoreCase);
 // Режим лабораторної 4: доменна модель, сценарії «успіх» і «порушення інваріантів».
 bool domain = args.Contains("--domain", StringComparer.OrdinalIgnoreCase);
 
+// Перший аргумент без "--" — це або підкоманда звіту (лабораторна 7), або шлях до
+// файлу імпорту. Прапорці на кшталт --file назвою звіту не стануть.
+string? firstArgument = args.FirstOrDefault(argument => !argument.StartsWith("--"));
+string? reportCommand = firstArgument is not null && firstArgument.StartsWith("report", StringComparison.OrdinalIgnoreCase)
+    ? firstArgument.ToLowerInvariant()
+    : null;
+
 // Шлях приходить аргументом; типове значення будується через Path.Combine,
 // щоб не зашивати роздільник каталогів конкретної ОС.
-string[] paths = args.Where(argument => !argument.StartsWith("--")).ToArray();
+string? filePath = reportCommand is null ? firstArgument : null;
 
 // Імпорт лабораторної 3 — за прапорцем --import або коли передано шлях до файлу.
-bool import = args.Contains("--import", StringComparer.OrdinalIgnoreCase) || paths.Length > 0;
+bool import = args.Contains("--import", StringComparer.OrdinalIgnoreCase) || filePath is not null;
 
 // Режим лабораторної 6: події сервісу, підписка, відписка, журнал logs/app.log.
 bool events = args.Contains("--events", StringComparer.OrdinalIgnoreCase);
@@ -42,7 +49,10 @@ bool events = args.Contains("--events", StringComparer.OrdinalIgnoreCase);
 bool sinkToConsole = args.Contains("--sink-console", StringComparer.OrdinalIgnoreCase);
 bool sinkToFile = args.Contains("--sink-file", StringComparer.OrdinalIgnoreCase);
 
-// Типовий режим (лабораторна 5) і --events. Composition root: єдине місце, де названо
+// Самоперевірка лабораторної 7: звіти на порожньому сховищі не повинні падати.
+bool empty = args.Contains("--empty", StringComparer.OrdinalIgnoreCase);
+
+// Типовий режим (лабораторна 5), --events і звіти. Composition root: єдине місце, де названо
 // конкретні класи сховищ; далі сервіс і сценарій бачать лише IOrderStore.
 if (!mixed && !domain && !import)
 {
@@ -51,7 +61,7 @@ if (!mixed && !domain && !import)
 
     IOrderStore store = useFile
         ? new FileOrderStore(dataPath)
-        : new InMemoryOrderStore(SampleData.Orders());
+        : new InMemoryOrderStore(empty ? [] : SampleData.Orders());
     if (args.Contains("--cache", StringComparer.OrdinalIgnoreCase))
         store = new CachingOrderStore(store);
     INotificationSink? sink = (sinkToFile, sinkToConsole) switch
@@ -67,6 +77,7 @@ if (!mixed && !domain && !import)
     {
         int exitCode = (sink, events) switch
         {
+            _ when reportCommand is not null => ReportCommands.Run(reportCommand, service),
             (not null, _) => SinkScenario.Run(service, sink, SampleData.Products()),
             (_, true) => EventScenario.Run(service, SampleData.Products(), PrepareLogPath("app.log")),
             _ => OrderScenario.Run(service, store, SampleData.Products())
@@ -90,7 +101,7 @@ string defaultFile = (mixed, domain) switch
     (_, true) => "catalog.csv",
     _ => "sample.csv"
 };
-string path = paths.Length > 0 ? paths[0] : Path.Combine("data", defaultFile);
+string path = filePath ?? Path.Combine("data", defaultFile);
 
 if (!File.Exists(path))
 {
