@@ -1,3 +1,4 @@
+using Core;
 using Core.Abstractions;
 using Core.Domain;
 using Core.Services;
@@ -83,7 +84,9 @@ internal static class OrderScenario
             action();
             Console.WriteLine($"  {title}: виняток НЕ спрацював!");
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        // DomainException — бізнес-правило, ArgumentException — аргумент, InvalidOperationException —
+        // контракт сховища (дубль id). Решта (диск, скасування) сюди не потрапляє.
+        catch (Exception ex) when (ex is DomainException or ArgumentException or InvalidOperationException)
         {
             Console.WriteLine($"  {title}: помилка — {ex.Message.ReplaceLineEndings(" ")}");
         }

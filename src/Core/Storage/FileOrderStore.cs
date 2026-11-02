@@ -83,7 +83,7 @@ public sealed class FileOrderStore(string path) : IOrderStore
                     _cache[order.Id] = order;
                 }
             }
-            catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
+            catch (Exception ex) when (ex is JsonException or ArgumentException or DomainException)
             {
                 // Синтаксична помилка JSON чи порушений інваріант — для викликача це одна
                 // ситуація: файл сховища непридатний. Кеш не лишається напівзаповненим.

@@ -6,6 +6,8 @@ namespace Core.Domain;
 /// Замовлення клієнта — головна сутність домену. Стан змінюється лише через
 /// AddLine, Confirm і Cancel; кожен метод спершу перевіряє ВСІ умови і лише
 /// потім змінює поля, тому виняток ніколи не залишає замовлення напівзміненим.
+/// Некоректний аргумент — ArgumentException; дія, недопустима в поточному стані
+/// замовлення (бізнес-правило), — <see cref="DomainException"/> (тиждень 8).
 /// </summary>
 public sealed class Order
 {
@@ -71,7 +73,7 @@ public sealed class Order
     {
         EnsureCanMoveTo(OrderStatus.Confirmed);
         if (_lines.Count == 0)
-            throw new InvalidOperationException(
+            throw new DomainException(
                 $"Замовлення {Id} порожнє: підтвердити можна лише замовлення з рядками");
 
         Status = OrderStatus.Confirmed;
@@ -107,8 +109,13 @@ public sealed class Order
         };
 
         Order order = Create(dto.Id, dto.CustomerId, dto.CreatedOn);
-        foreach (OrderLineDto line in dto.Lines)
+        // Анотації nullable — лише обіцянка: з JSON може прийти "lines": null або null-елемент.
+        foreach (OrderLineDto? line in dto.Lines ?? [])
+        {
+            if (line is null)
+                throw new ArgumentException($"Замовлення {dto.Id}: порожній елемент у списку рядків", nameof(dto));
             order.AddLine(line.ProductId, line.ProductName, line.UnitPrice, line.Quantity);
+        }
 
         if (status == OrderStatus.Confirmed)
             order.Confirm();
@@ -133,17 +140,28 @@ public sealed class Order
             _ => false
         };
 
-        if (!allowed)
-            throw new InvalidOperationException(
-                $"Замовлення {Id}: перехід «{Describe(Status)}» → «{Describe(target)}» неможливий");
+        if (allowed)
+            return;
+
+        throw Status == target
+            ? new DomainException($"Замовлення {Id} вже {DescribeDone(Status)}")
+            : new DomainException($"Замовлення {Id}: перехід «{Describe(Status)}» → «{Describe(target)}» неможливий");
     }
 
     private void EnsureDraft(string action)
     {
         if (Status != OrderStatus.Draft)
-            throw new InvalidOperationException(
-                $"Замовлення {Id} має стан «{Describe(Status)}»: {action} можна лише в чернетці");
+            throw new DomainException(
+                $"Замовлення {Id} вже {DescribeDone(Status)}: {action} можна лише в чернетці");
     }
+
+    // «вже підтверджено» — текст бізнес-правила варіанта «Замовлення».
+    private static string DescribeDone(OrderStatus status) => status switch
+    {
+        OrderStatus.Confirmed => "підтверджено",
+        OrderStatus.Cancelled => "скасовано",
+        _ => Describe(status)
+    };
 
     private static string Describe(OrderStatus status) => status switch
     {

@@ -28,9 +28,14 @@ bool mixed = args.Contains("--mixed", StringComparer.OrdinalIgnoreCase);
 // Режим лабораторної 4: доменна модель, сценарії «успіх» і «порушення інваріантів».
 bool domain = args.Contains("--domain", StringComparer.OrdinalIgnoreCase);
 
-// Перший аргумент без "--" — це або підкоманда звіту (лабораторна 7), або шлях до
+// Перший аргумент без "--" — це підкоманда (report-* лабораторної 7, import-orders 8-ї) або шлях до
 // файлу імпорту. Прапорці на кшталт --file назвою звіту не стануть.
 string? firstArgument = args.FirstOrDefault(argument => !argument.StartsWith("--"));
+
+// Лабораторна 8: асинхронний імпорт замовлень з Ctrl+C і таймаутом — окрема гілка з await.
+if (string.Equals(firstArgument, ImportCommand.Name, StringComparison.OrdinalIgnoreCase))
+    return await RunImportAsync(args);
+
 string? reportCommand = firstArgument is not null && firstArgument.StartsWith("report", StringComparison.OrdinalIgnoreCase)
     ? firstArgument.ToLowerInvariant()
     : null;
@@ -148,6 +153,62 @@ Console.WriteLine($"Підсумок: усього {result.TotalRows}, прий�
 Console.WriteLine($"Звіт про пропущені рядки: {skippedReportPath}");
 
 return 0;
+
+// Composition root імпорту і розмежування результатів: скасування, таймаут, відхилені
+// дані, відсутній файл — кожен зі своїм повідомленням замість стека виклику.
+static async Task<int> RunImportAsync(string[] args)
+{
+    IOrderStore store = args.Contains("--file", StringComparer.OrdinalIgnoreCase)
+        ? new FileOrderStore(Path.Combine(AppContext.BaseDirectory, "data", "orders.json"))
+        : new InMemoryOrderStore(SampleData.Orders());
+    var service = new OrderService(store, TimeProvider.System);
+    Console.WriteLine($"Сховище: {store}");
+
+    using var cts = new CancellationTokenSource();
+    // e.Cancel = true: процес не обривається, а імпорт зупиняється кооперативно через токен.
+    ConsoleCancelEventHandler onCancel = (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+    Console.CancelKeyPress += onCancel;
+    // Для демонстрації таймауту без прапорця: cts.CancelAfter(TimeSpan.FromSeconds(2));
+
+    try
+    {
+        return await ImportCommand.RunAsync(service, args, cts.Token);
+    }
+    // Порядок важливий: скасування — очікуваний результат, а не збій, тому раніше за загальні обробники.
+    catch (OperationCanceledException)
+    {
+        Console.WriteLine("Імпорт скасовано.");
+        return 2;
+    }
+    catch (TimeoutException ex)
+    {
+        Console.WriteLine($"Імпорт скасовано: спрацював таймаут. {ex.Message}");
+        return 2;
+    }
+    catch (DomainException ex)
+    {
+        Console.WriteLine($"Дані відхилено: {ex.Message}");
+        return 1;
+    }
+    catch (FileNotFoundException ex)
+    {
+        Console.WriteLine($"Файл не знайдено: {ex.FileName}");
+        return 1;
+    }
+    catch (IOException ex)
+    {
+        Console.WriteLine($"Помилка введення-виведення: {ex.Message}");
+        return 1;
+    }
+    finally
+    {
+        Console.CancelKeyPress -= onCancel;   // після Dispose токена Ctrl+C більше не звертається до cts
+    }
+}
 
 // Журнали — справа Cli: Core не знає ні про файл, ні про каталог logs.
 static string PrepareLogPath(string fileName)

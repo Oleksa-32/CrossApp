@@ -9,5 +9,6 @@ public enum OrderChangeKind
     Created,
     LineAdded,
     Confirmed,
-    Cancelled
+    Cancelled,
+    Imported    // тиждень 8: замовлення додано асинхронним імпортом
 }
