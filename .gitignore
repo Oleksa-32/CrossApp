@@ -480,3 +480,12 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Лабораторна 9: дані, що створюються в рантаймі. Каталог data/ у корені містить лише
+# вхідні приклади (у git); файл сховища, експорт і проміжні .tmp — ні.
+/data/orders.json
+/data/export*.json
+src/Cli/data/
+*.json.tmp
+# user-secrets живуть поза репозиторієм, але випадкова копія secrets.json сюди не потрапить
+secrets.json

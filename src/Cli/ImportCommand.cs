@@ -21,7 +21,7 @@ internal static class ImportCommand
     public const string Name = "import-orders";
 
     private const int FileBufferSize = 4096;
-    private static readonly string DefaultPath = Path.Combine("data", "orders-import.json");
+    private static readonly string DefaultPath = Samples.PathOf("orders-import.json");
 
     public static async Task<int> RunAsync(OrderService service, string[] args, CancellationToken ct)
     {

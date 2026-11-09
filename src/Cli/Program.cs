@@ -22,6 +22,23 @@ if (args.Contains("--env", StringComparer.OrdinalIgnoreCase))
     return 0;
 }
 
+// Лабораторна 9: конфігурація збирається один раз і до вибору режиму — шлях до файлу сховища
+// тепер приходить з appsettings*.json / user-secrets / змінних CROSSAPP_*, а не з коду.
+AppConfiguration config;
+try
+{
+    config = AppConfiguration.Build(args);
+}
+catch (Exception ex) when (ex is InvalidOperationException or FormatException or InvalidDataException
+                               or FileNotFoundException or IOException or UnauthorizedAccessException)
+{
+    // Неіснуючий рівень логу, зіпсований appsettings.json, недоступний каталог даних —
+    // повідомлення замість стека виклику.
+    Console.WriteLine($"Помилка конфігурації: {ex.Message}");
+    return 1;
+}
+var log = new AppLog(config.Options.Logging.MinimumLevel);
+
 // Режим змішаного файлу: рядки різних типів розрізняються префіксом у першій колонці.
 bool mixed = args.Contains("--mixed", StringComparer.OrdinalIgnoreCase);
 
@@ -34,7 +51,11 @@ string? firstArgument = args.FirstOrDefault(argument => !argument.StartsWith("--
 
 // Лабораторна 8: асинхронний імпорт замовлень з Ctrl+C і таймаутом — окрема гілка з await.
 if (string.Equals(firstArgument, ImportCommand.Name, StringComparison.OrdinalIgnoreCase))
-    return await RunImportAsync(args);
+    return await RunImportAsync(args, config.DataFile);
+
+// Лабораторна 9: config, export, import — експорт та імпорт усієї колекції у JSON.
+if (ExchangeCommands.IsCommand(firstArgument))
+    return ExchangeCommands.Run(firstArgument!, args, config, log);
 
 string? reportCommand = firstArgument is not null && firstArgument.StartsWith("report", StringComparison.OrdinalIgnoreCase)
     ? firstArgument.ToLowerInvariant()
@@ -62,7 +83,7 @@ bool empty = args.Contains("--empty", StringComparer.OrdinalIgnoreCase);
 if (!mixed && !domain && !import)
 {
     bool useFile = args.Contains("--file", StringComparer.OrdinalIgnoreCase);
-    string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "orders.json");
+    string dataPath = config.DataFile;
 
     IOrderStore store = useFile
         ? new FileOrderStore(dataPath)
@@ -106,7 +127,7 @@ string defaultFile = (mixed, domain) switch
     (_, true) => "catalog.csv",
     _ => "sample.csv"
 };
-string path = filePath ?? Path.Combine("data", defaultFile);
+string path = filePath ?? Samples.PathOf(defaultFile);
 
 if (!File.Exists(path))
 {
@@ -156,10 +177,10 @@ return 0;
 
 // Composition root імпорту і розмежування результатів: скасування, таймаут, відхилені
 // дані, відсутній файл — кожен зі своїм повідомленням замість стека виклику.
-static async Task<int> RunImportAsync(string[] args)
+static async Task<int> RunImportAsync(string[] args, string dataFile)
 {
     IOrderStore store = args.Contains("--file", StringComparer.OrdinalIgnoreCase)
-        ? new FileOrderStore(Path.Combine(AppContext.BaseDirectory, "data", "orders.json"))
+        ? new FileOrderStore(dataFile)
         : new InMemoryOrderStore(SampleData.Orders());
     var service = new OrderService(store, TimeProvider.System);
     Console.WriteLine($"Сховище: {store}");
