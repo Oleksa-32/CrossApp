@@ -2,7 +2,9 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <!-- Точка входу має одну цільову платформу net10.0: тоді dotnet run працює з будь-якого
+         каталогу без явного вибору платформи. Мультитаргетинг net8.0;net10.0 лишається в Core. -->
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UserSecretsId>a9d42de8-71ce-444c-b739-624d0da6e95d</UserSecretsId>

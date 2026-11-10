@@ -64,7 +64,7 @@ CrossApp/
         EnumerableExtensions.cs  метод-розширення TopBy (додатково)
         ReportVariants.cs   варіанти звітів для вимірювань Stopwatch (додатково)
       SampleData.cs         10 товарів, 8 клієнтів, 20 замовлень за три місяці; Generate(100 000)
-    Cli/                    консольний застосунок (net8.0;net10.0)
+    Cli/                    консольний застосунок (net10.0)
       Cli.csproj            ProjectReference на Core, пакети конфігурації, UserSecretsId (тиждень 9)
       appsettings.json      базові налаштування — у git, без секретів (тиждень 9)
       appsettings.Development.json  детальніший лог (Debug)
@@ -1370,13 +1370,20 @@ Minimal API прийме `CancellationToken` параметром обробни
 ## Шляхи, JSON, конфігурація, secrets (лабораторна 9)
 
 ```bash
-dotnet run --project src/Cli -f net10.0 -- config                    # звідки взялися налаштування
-dotnet run --project src/Cli -f net10.0 -- export                    # уся колекція → файл даних
-dotnet run --project src/Cli -f net10.0 -- export out/orders.json    # + копія у довільний файл
-dotnet run --project src/Cli -f net10.0 -- import                    # samples/orders-import.json → сховище
-dotnet run --project src/Cli -f net10.0 -- import data/orders-broken.json   # «Дані відхилено: …, запис 3: …»
-dotnet test                                                          # 40 тестів
+dotnet run --project src/Cli -- config                    # звідки взялися налаштування
+dotnet run --project src/Cli -- import                    # колекція з файлу даних; файлу немає → 0 записів
+dotnet run --project src/Cli -- import --sample           # демо: samples/orders-import.json → сховище (17)
+dotnet run --project src/Cli -- import data/orders-import.json      # довільний файл (шлях від cwd)
+dotnet run --project src/Cli -- import data/orders-broken.json      # «Дані відхилено: …, запис 3: …»
+dotnet run --project src/Cli -- export                    # уся колекція → файл даних (порожня → [])
+dotnet run --project src/Cli -- export out/orders.json    # + копія у довільний файл
+dotnet test                                               # 40 тестів
 ```
+
+Cli має одну цільову платформу `net10.0`, тому `-f` не потрібен і `dotnet run` працює з будь-якого
+каталогу: з кореня solution, з `src/Cli` (`dotnet run -- export`) чи з `/tmp`
+(`dotnet run --project <шлях>/src/Cli -- export`). Мультитаргетинг `net8.0;net10.0` лишився в Core.
+Видалений `data/` або `orders.json` — не помилка: `import` показує порожню колекцію, `export` пише `[]`.
 
 Очікуваний вивід (профіль Development):
 
@@ -1915,7 +1922,7 @@ dotnet test --logger "console;verbosity=normal"
 dotnet run --project src/Cli -f net10.0 -- export
 dotnet run --project src/Cli -f net10.0 -- export data/export-demo.json
 dotnet run --project src/Cli -f net10.0 -- import
-
+/
 2)
 src/Cli/AppConfiguration.cs — SetBasePath(AppContext.BaseDirectory).
 src/Core/Configuration/AppOptions.cs — StorageOptions.ResolveFullPath: тут Path.Combine від базового каталогу і GetFullPath.
@@ -1959,3 +1966,16 @@ dotnet build
 dotnet test
 git log --oneline -1
 
+~/.microsoft/usersecrets/a9d42de8-71ce-444c-b739-624d0da6e95d/secrets.json
+
+
+
+rm -rf src/Cli/bin/Debug/net10.0/data
+
+dotnet run --project src/Cli -- import
+
+dotnet run --project src/Cli -- import --sample
+
+cd src/Cli && dotnet run -- export
+
+cd /tmp && dotnet run --project /Users/admin/LNU/lab_KPP/CrossApp/src/Cli -- export

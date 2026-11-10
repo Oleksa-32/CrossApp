@@ -1,4 +1,3 @@
-using Core;
 using Core.Domain;
 using Core.Storage;
 
@@ -11,7 +10,9 @@ namespace Cli;
 /// <remarks>
 /// config                — звідки взялися налаштування і куди піде файл даних
 /// export [шлях]         — уся колекція у файл даних (або додатково в довільний файл)
-/// import [шлях]         — замовлення з JSON-файлу у сховище; наявні id пропускаються
+/// import                — колекція з файлу даних; файлу немає — колекція порожня, 0 записів
+/// import --sample       — демо-замовлення (samples/orders-import.json біля Cli.dll) у сховище
+/// import шлях           — замовлення з довільного JSON-файлу у сховище; наявні id пропускаються
 /// </remarks>
 internal static class ExchangeCommands
 {
@@ -32,7 +33,10 @@ internal static class ExchangeCommands
             return command.ToLowerInvariant() switch
             {
                 "export" => Export(config, path),
-                "import" => Import(config, path ?? Samples.PathOf("orders-import.json")),
+                "import" when path is not null => Import(config, path),
+                "import" when args.Contains("--sample", StringComparer.OrdinalIgnoreCase) =>
+                    Import(config, Samples.PathOf("orders-import.json")),
+                "import" => Load(config),
                 _ => PrintConfig(config)
             };
         }
@@ -55,18 +59,11 @@ internal static class ExchangeCommands
         }
     }
 
-    // Експорт: колекція сховища записується у файл даних. На першому запуску сховище
-    // порожнє — тоді воно заповнюється демо-замовленнями, щоб було що експортувати.
+    // Експорт: поточна колекція сховища записується у файл даних. Порожнє сховище дає
+    // порожній масив [] — дані нізвідки не підставляються.
     private static int Export(AppConfiguration config, string? target)
     {
-        var store = new FileOrderStore(config.DataFile);
-        if (store.List().Count == 0)
-        {
-            foreach (Order order in SampleData.Orders())
-                store.Add(order);
-        }
-
-        IReadOnlyList<Order> orders = store.List();
+        IReadOnlyList<Order> orders = new FileOrderStore(config.DataFile).List();
         OrderJsonFile.Write(config.DataFile, orders);
 
         if (target is not null)
@@ -82,10 +79,29 @@ internal static class ExchangeCommands
         return 0;
     }
 
+    // Імпорт колекції з файлу даних. Видалений файл чи каталог data/ — не помилка, а порожня
+    // колекція: FileOrderStore без файлу повертає порожній список, каталог уже створено конфігурацією.
+    private static int Load(AppConfiguration config)
+    {
+        if (!File.Exists(config.DataFile))
+            Console.WriteLine("Файл даних відсутній — колекція порожня.");
+
+        IReadOnlyList<Order> orders = new FileOrderStore(config.DataFile).List();
+        Console.WriteLine($"Імпортовано {orders.Count} {Records(orders.Count)}.");
+        PrintOrders(orders, config.Currency);
+        return 0;
+    }
+
     private static int Import(AppConfiguration config, string source)
     {
+        // Шлях з аргументу — відносно поточного каталогу, як у будь-якої консольної утиліти.
         string fullSource = Path.GetFullPath(source);
         Console.WriteLine($"Джерело       : {fullSource}");
+        if (!File.Exists(fullSource))
+        {
+            Console.WriteLine($"Файл не знайдено: {fullSource}");
+            return 1;
+        }
 
         IReadOnlyList<Order> incoming = OrderJsonFile.Read(fullSource);
         var store = new FileOrderStore(config.DataFile);
