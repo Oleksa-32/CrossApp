@@ -1804,3 +1804,158 @@ dotnet run --project src/Cli -f net10.0 -- README.md
 
 
 dotnet build -f net8.0
+
+
+різнорідні рядки за префіксом
+dotnet run --project src/Cli -f net10.0 -- --mixed
+Один файл, два типи: P — товар, C — клієнт. Один switch повертає два різні типи результату. 5 товарів, 5 клієнтів, 4 помилки.
+
+cat -n data/mixed.csv
+
+
+статистика імпорту
+dotnet run --project src/Cli -f net10.0 | tail -1
+
+
+в DomainDemo.cs рядок order.Status = OrderStatus.Draft;
+
+
+dotnet build
+dotnet build -f net8.0
+dotnet run --project src/Cli -f net10.0 -- --domain
+
+
+dotnet run --project src/Cli -f net10.0 -- --domain
+
+
+/Users/admin/LNU/lab_KPP/CrossApp/src/Cli/bin/Debug/net10.0/data/orders.json
+
+dotnet run --project src/Cli -f net10.0
+rm -rf src/Cli/bin/Debug/net10.0/data
+dotnet run --project src/Cli -f net10.0 -- --file
+cat src/Cli/bin/Debug/net10.0/data/orders.json
+dotnet list package
+
+
+
+rm -rf src/Cli/bin/Debug/net10.0/logs
+dotnet run --project src/Cli -f net10.0 -- --events
+
+dotnet run --project src/Cli -f net10.0 -- --events --file --cache
+
+dotnet run --project src/Cli -f net10.0
+
+dotnet run --project src/Cli -f net10.0
+
+
+
+
+dotnet build
+Основні звіти
+dotnet run --project src/Cli -f net10.0 -- report-top
+dotnet run --project src/Cli -f net10.0 -- report-orders
+dotnet run --project src/Cli -f net10.0 -- report-expensive
+dotnet run --project src/Cli -f net10.0 -- report-groups
+dotnet run --project src/Cli -f net10.0 -- report-months
+dotnet run --project src/Cli -f net10.0 -- report-products
+dotnet run --project src/Cli -f net10.0 -- report-sum
+Відкладене виконання
+dotnet run --project src/Cli -f net10.0 -- report-deferred
+Порожнє джерело
+dotnet run --project src/Cli -f net10.0 -- report-sum --empty
+dotnet run --project src/Cli -f net10.0 -- report-expensive --empty
+Звіти з файловим сховищем (прапорець --file не стає назвою звіту)
+dotnet run --project src/Cli -f net10.0 -- report-groups --file
+Додаткові завдання
+dotnet run --project src/Cli -f net10.0 -- report-customers
+dotnet run --project src/Cli -f net10.0 -- report-join
+dotnet run --project src/Cli -f net10.0 -- report-query
+dotnet run --project src/Cli -c Release -f net10.0 -- report-bench
+Перелік усіх підкоманд
+dotnet run --project src/Cli -f net10.0 -- report
+
+ 
+відкладене DeferredScenario.cs.
+
+EnumerableExtensions.cs -своє Топ-N
+
+ReportService.cs, метод ByStatusQuery (from … group … into g … select), поруч із ByStatus
+
+
+
+
+
+
+dotnet run --project src/Cli -f net10.0 -- import-orders
+dotnet run --project src/Cli -f net10.0 -- import-orders --repeat
+dotnet run --project src/Cli -f net10.0 -- import-orders nope.json
+
+
+
+
+4. dotnet run --project src/Cli -f net10.0 -- import-orders --big=600000 --timeout=2000
+dotnet run --project src/Cli -f net10.0 -- import-orders --big=600000
+
+5. dotnet run --project src/Cli -f net10.0 -- import-orders data/orders-broken.json
+
+6. dotnet test
+dotnet test --logger "console;verbosity=normal"
+
+1. dotnet run --project src/Cli -f net10.0 -- import-orders --stream
+
+2. dotnet test --filter "FullyQualifiedName~WithTimeoutAsync"
+
+3. dotnet run --project src/Cli -f net10.0 -- import-orders --big=200000
+
+4. dotnet test --collect:"XPlat Code Coverage"
+
+
+
+1)
+dotnet run --project src/Cli -f net10.0 -- export
+dotnet run --project src/Cli -f net10.0 -- export data/export-demo.json
+dotnet run --project src/Cli -f net10.0 -- import
+
+2)
+src/Cli/AppConfiguration.cs — SetBasePath(AppContext.BaseDirectory).
+src/Core/Configuration/AppOptions.cs — StorageOptions.ResolveFullPath: тут Path.Combine від базового каталогу і GetFullPath.
+src/Cli/Samples.cs
+
+3) git ls-files src/Cli
+
+4) 
+dotnet run --project src/Cli -f net10.0 -- config
+CROSSAPP_DATA_PATH=/tmp/crossapp-demo dotnet run --project src/Cli -f net10.0 -- export
+ls /tmp/crossapp-demo
+
+
+
+5)  Secret читається з user-secrets або env; запуск з довільного cwd працює
+Секрет з user-secrets (профіль Development):
+
+dotnet user-secrets list --project src/Cli
+dotnet run --project src/Cli -f net10.0 -- config
+Очікувано: ApiKey: присутній, довжина N і шлях до secrets.json у рядку user-secrets. Перша команда показує значення ключа на екрані, тому на захисті краще показати тільки другу.
+
+Секрет зі змінної середовища (у Production user-secrets не підключаються):
+
+CROSSAPP_ENVIRONMENT=Production dotnet run --project src/Cli -f net10.0 -- config
+CROSSAPP_ENVIRONMENT=Production CROSSAPP_Integration__ApiKey=demo-key dotnet run --project src/Cli -f net10.0 -- config
+Перша команда виведе ApiKey: не заданий, друга — присутній, довжина 8.
+
+Запуск з довільного каталогу. Спочатку з кореня:
+
+dotnet run --project src/Cli -f net10.0 -- config
+Потім з src/Cli:
+
+cd src/Cli && dotnet run -f net10.0 -- config
+Потім з /tmp, запуском самої dll:
+
+cd /tmp && dotnet /Users/admin/LNU/lab_KPP/CrossApp/src/Cli/bin/Debug/net10.0/Cli.dll config
+
+
+7) 
+dotnet build
+dotnet test
+git log --oneline -1
+
